@@ -1,0 +1,48 @@
+{
+  "base_seed": 50000,
+  "episodes_per_mode": 100,
+  "controller": "sac",
+  "hard_gate_passed": false,
+  "modes": {
+    "training_nominal": {
+      "successes": 100,
+      "unsafe": 0,
+      "captures": 100,
+      "mean_limits_passed": true
+    },
+    "training_randomized": {
+      "successes": 99,
+      "unsafe": 1,
+      "captures": 100,
+      "mean_limits_passed": false,
+      "failed_mean_limit": {
+        "metric": "final_omega1_rms_rad_s",
+        "value": 0.0708,
+        "limit": 0.05,
+        "cause": "unsafe seed 50116"
+      }
+    },
+    "downward_rest_randomized": {
+      "successes": 100,
+      "unsafe": 0,
+      "captures": 100,
+      "mean_limits_passed": true
+    }
+  },
+  "failure": {
+    "seed": 50116,
+    "initial_theta1_rad": -1.2032421183764106,
+    "initial_theta2_rad": -2.997445444676003,
+    "initial_omega1_rad_s": -8.181118181683289,
+    "initial_omega2_rad_s": -4.3335344517980285,
+    "current_filter_cutoff_hz": 83.3621361762816,
+    "action_dead_time_samples": 1,
+    "termination_time_s": 0.162,
+    "maximum_abs_omega1_rad_s": 9.773778848888856,
+    "hybrid_reproduced": true,
+    "hybrid_handover_time_s": null
+  },
+  "full_hybrid_holdout_run": false,
+  "stress_suite_run": false,
+  "decision": "not_finalized"
+}

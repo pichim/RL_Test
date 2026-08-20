@@ -1,0 +1,20 @@
+{
+  "selection_status": "frozen_simulation_candidate",
+  "source_stage": "stage2_selected_1500000",
+  "source_num_timesteps": 1500000,
+  "selected_num_timesteps": 2400000,
+  "stage3b_adaptation_steps": 900000,
+  "curriculum_ramp_steps": 1000000,
+  "selected_randomization_scale": 0.9,
+  "standalone_evaluation_randomization_scale": 1.0,
+  "learning_rate_at_selection": 0.0003,
+  "seed": 0,
+  "actor_network": [8, 8],
+  "critic_network": [64, 64],
+  "train_frequency": 2,
+  "gradient_steps": 1,
+  "entropy_coefficient": "auto_0.1",
+  "target_entropy": -1.0,
+  "replay_buffer_included": false,
+  "further_training_supported": false
+}

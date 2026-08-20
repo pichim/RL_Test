@@ -1,0 +1,48 @@
+{
+  "artifact_version": "stage3b_v0",
+  "status": "holdout_failed_broad_boundary_case",
+  "task_version": "matlab_hardware_sac_pure_v0",
+  "model_sha256": "6f8e7ac5a5f08e9aa1e45698272bd52e31e2cf638a24efc0a23923cc910ef921",
+  "policy_pth_sha256": "1919a2b8f5706350917e49843d2966c984bdd73e2ffadba9b16d9c698735c225",
+  "config_sha256": "aebd351f594d8edf32a62d11fb19296afcd3b05598abe1865ad641bc248193b2",
+  "training_sha256": "8d03910421ad030c99ae86455c1a5373e2dfb56c94917868b81c573f7ac0830e",
+  "source_checkpoint": "src/runs/sac_200hz_matlab_pure_actor8_critic64_stage3b_curriculum_filter50to100_delay1_vel15rps_seed0_v0/checkpoints/sac_2400000_steps.zip",
+  "source_stage": "stage2_selected_1500000",
+  "selected_num_timesteps": 2400000,
+  "stage3b_adaptation_steps": 900000,
+  "training_curriculum_scale": 0.9,
+  "evaluation_curriculum_scale": 1.0,
+  "selection_seed_range": [10000, 10299],
+  "selection_evaluation": {
+    "sac_successes": [100, 100, 100],
+    "hybrid_successes": [100, 100, 100],
+    "unsafe_episodes": 0
+  },
+  "holdout_evaluation": {
+    "base_seed": 50000,
+    "episodes_per_mode": 100,
+    "controller": "sac",
+    "successes": [100, 99, 100],
+    "unsafe_episodes": 1,
+    "failed_seed": 50116,
+    "failure_mode": "training_randomized",
+    "hybrid_single_seed_confirmation": {
+      "success": false,
+      "unsafe": true,
+      "handover_time_s": null
+    },
+    "accepted": false
+  },
+  "stress_evaluation": null,
+  "restricted_envelope_evaluation": {
+    "protocol": "stage3b_v0_half_rps_operational_envelope_v1",
+    "base_seed": 60000,
+    "randomized_arm_velocity_half_range_rps": 0.5,
+    "successes": [99, 100, 100],
+    "unsafe_episodes": 1,
+    "failed_seed": 60066,
+    "accepted": false
+  },
+  "hardware_ready": false,
+  "replay_buffer_included": false
+}
