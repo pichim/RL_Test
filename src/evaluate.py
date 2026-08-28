@@ -40,10 +40,10 @@ DEFAULT_BASE_SEED = 10_000
 FIRST_DETAILED_EPISODES = 5
 
 ROOT = Path(__file__).resolve().parent
-SELECTED_DIR = ROOT.parent / "models" / "stage3b_v0"
+SELECTED_DIR = ROOT.parent / "models" / "stage3c_half_rps_v0"
 RUN_DIR = SELECTED_DIR
 MODEL_PATH = SELECTED_DIR / "model.zip"
-RESULTS_DIR = ROOT / "runs" / "evaluation_stage3b_v0"
+RESULTS_DIR = ROOT / "runs" / "evaluation_stage3c_half_rps_v0"
 
 TRACE_FIELDS = (
     "time_s",
@@ -208,6 +208,7 @@ def load_run_config(
     candidates = [config_path] if config_path is not None else [
         model_path.parent / "config.json",
         model_path.parent.parent / "config.json",
+        model_path.parent.parent.parent / "config.json",
     ]
     found = next(
         (path for path in candidates if path is not None and path.is_file()),

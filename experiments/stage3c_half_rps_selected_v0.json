@@ -1,0 +1,72 @@
+{
+  "recipe_version": 1,
+  "name": "Selected Stage-3c half-revolution-per-second arm chain",
+  "purpose": "Canonical from-scratch reconstruction of the selected 2.6M controller, with complete resume artifacts retained at the comparison and selected boundaries.",
+  "stages": [
+    {
+      "id": "stage2_scratch_1m",
+      "initialization": "scratch",
+      "timesteps": 1000000,
+      "run_dir": "src/runs/reproduce_stage3c_half_rps_selected_v0_seed{seed}_stage2_1m",
+      "args": [
+        "--current-filter-cutoff-hz",
+        "100"
+      ]
+    },
+    {
+      "id": "stage2_continue_1p5m",
+      "initialization": "resume",
+      "parent": "stage2_scratch_1m",
+      "timesteps": 500000,
+      "run_dir": "src/runs/reproduce_stage3c_half_rps_selected_v0_seed{seed}_stage2_1p5m",
+      "args": [
+        "--current-filter-cutoff-hz",
+        "100"
+      ]
+    },
+    {
+      "id": "stage3c_curriculum",
+      "initialization": "curriculum",
+      "parent": "stage2_continue_1p5m",
+      "timesteps": 1500000,
+      "run_dir": "src/runs/reproduce_stage3c_half_rps_selected_v0_seed{seed}_stage3c",
+      "args": [
+        "--current-filter-cutoff-hz",
+        "100",
+        "--current-filter-cutoff-range-hz",
+        "50",
+        "100",
+        "--parameter-randomization",
+        "--motor-torque-randomization",
+        "0.10",
+        "--arm-mass-randomization",
+        "0.10",
+        "--arm-inertia-randomization",
+        "0.10",
+        "--pendulum-mass-randomization",
+        "0.10",
+        "--pendulum-inertia-randomization",
+        "0.10",
+        "--arm-damping-randomization",
+        "0.10",
+        "--pendulum-damping-randomization",
+        "0.10",
+        "--action-dead-time-max-samples",
+        "1",
+        "--randomized-reset-omega1-half-range-rps",
+        "0.5",
+        "--randomized-reset-omega2-half-range-rps",
+        "1.5",
+        "--curriculum-ramp-steps",
+        "1000000",
+        "--curriculum-final-learning-rate",
+        "0.0001",
+        "--curriculum-final-learning-rate-steps",
+        "500000",
+        "--resume-milestone-timesteps",
+        "2400000",
+        "2600000"
+      ]
+    }
+  ]
+}

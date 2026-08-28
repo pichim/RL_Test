@@ -102,7 +102,7 @@
             ]
         },
         {
-            "name": "Evaluate selected stage3b_v0: SAC and hybrid",
+            "name": "Evaluate selected Stage3c 2.6M: selection seeds",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/src/evaluate.py",
@@ -110,47 +110,36 @@
             "console": "integratedTerminal",
             "args": [
                 "--results-dir",
-                "${workspaceFolder}/src/runs/evaluation_stage3b_v0_selection_recheck"
+                "${workspaceFolder}/src/runs/evaluation_stage3c_half_rps_v0_selection_recheck"
             ]
         },
         {
-            "name": "Finalize stage3b_v0: unseen holdout SAC",
+            "name": "Qualify selected Stage3c: show frozen protocols",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/src/evaluate.py",
+            "program": "${workspaceFolder}/src/qualify.py",
             "cwd": "${workspaceFolder}",
             "console": "integratedTerminal",
             "args": [
-                "--controller",
-                "sac",
-                "--episodes",
-                "100",
-                "--base-seed",
-                "50000",
-                "--results-dir",
-                "${workspaceFolder}/src/runs/evaluation_stage3b_v0_holdout_sac"
+                "--suite",
+                "all"
             ]
         },
         {
-            "name": "Finalize stage3b_v0: unseen holdout hybrid",
+            "name": "Qualify selected Stage3c: execute all",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/src/evaluate.py",
+            "program": "${workspaceFolder}/src/qualify.py",
             "cwd": "${workspaceFolder}",
             "console": "integratedTerminal",
             "args": [
-                "--controller",
-                "hybrid",
-                "--episodes",
-                "100",
-                "--base-seed",
-                "50000",
-                "--results-dir",
-                "${workspaceFolder}/src/runs/evaluation_stage3b_v0_holdout_hybrid"
+                "--suite",
+                "all",
+                "--execute"
             ]
         },
         {
-            "name": "Finalize stage3b_v0: corner and 30 s stress",
+            "name": "Stress selected Stage3c: corners and 30 s",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/src/stress_evaluate.py",
@@ -164,27 +153,7 @@
                 "--long-duration",
                 "30",
                 "--results-dir",
-                "${workspaceFolder}/src/runs/stress_stage3b_v0"
-            ]
-        },
-        {
-            "name": "Qualify stage3b_v0: half-rps holdout SAC",
-            "type": "debugpy",
-            "request": "launch",
-            "program": "${workspaceFolder}/src/evaluate.py",
-            "cwd": "${workspaceFolder}",
-            "console": "integratedTerminal",
-            "args": [
-                "--controller",
-                "sac",
-                "--episodes",
-                "100",
-                "--base-seed",
-                "60000",
-                "--randomized-arm-velocity-half-range-rps",
-                "0.5",
-                "--results-dir",
-                "${workspaceFolder}/src/runs/evaluation_stage3b_v0_half_rps_v1_sac"
+                "${workspaceFolder}/src/runs/stress_stage3c_half_rps_v0"
             ]
         },
         {
@@ -242,7 +211,7 @@
             ]
         },
         {
-            "name": "Continue completed Stage3c half-rps: exact +500k",
+            "name": "Continue reproduced selected 2.6M: exact +500k",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/src/train.py",
@@ -250,7 +219,7 @@
             "console": "integratedTerminal",
             "args": [
                 "--resume-model",
-                "${workspaceFolder}/src/runs/reproduce_stage3c_half_rps_v0_seed0_stage3c/final",
+                "${workspaceFolder}/src/runs/reproduce_stage3c_half_rps_selected_v0_seed0_stage3c/milestones/state_000002600000",
                 "--timesteps",
                 "500000",
                 "--current-filter-cutoff-hz",
@@ -280,7 +249,7 @@
                 "--randomized-reset-omega2-half-range-rps",
                 "1.5",
                 "--run-dir",
-                "${workspaceFolder}/src/runs/reproduce_stage3c_half_rps_v0_seed0_stage3c_continued_500k"
+                "${workspaceFolder}/src/runs/reproduce_stage3c_half_rps_selected_v0_seed0_stage3c_continued_500k"
             ]
         }
     ]

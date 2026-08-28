@@ -12,7 +12,9 @@ import sys
 
 
 WORKSPACE = Path(__file__).resolve().parent.parent
-DEFAULT_RECIPE = WORKSPACE / "experiments" / "stage3c_half_rps_v0.json"
+DEFAULT_RECIPE = (
+    WORKSPACE / "experiments" / "stage3c_half_rps_selected_v0.json"
+)
 
 
 def file_sha256(path: Path) -> str:

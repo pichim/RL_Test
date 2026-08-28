@@ -25,7 +25,7 @@ from furuta_model import FurutaPendulum
 
 
 ROOT = Path(__file__).resolve().parent
-RESULTS_DIR = ROOT / "runs" / "stress_stage3b_v0"
+RESULTS_DIR = ROOT / "runs" / "stress_stage3c_half_rps_v0"
 STRESS_FIELDS = (
     "case_name",
     "profile",

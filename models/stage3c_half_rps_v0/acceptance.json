@@ -1,0 +1,43 @@
+{
+  "protocol": "stage3c_half_rps_v0_seed0_2600k_holdout_v0",
+  "status": "predeclared_before_execution",
+  "model_sha256": "ce2371e3f57107ae755fe5c6b8317129c5386e8cc96f9bc9f94d6f9282d63fbf",
+  "base_seed": 70000,
+  "episodes_per_mode": 100,
+  "controllers": ["sac", "hybrid"],
+  "hard_requirements": {
+    "successes_per_mode": 100,
+    "unsafe_per_mode": 0,
+    "captures_per_mode": 100
+  },
+  "sac_mean_limits": {
+    "training_nominal": {
+      "swingup_current_change_rms_A": 0.03648,
+      "swingup_current_total_variation_A": 7.314,
+      "arm_excursion_rad": 1.597,
+      "omega1_rms_rad_s": 1.872,
+      "omega2_rms_rad_s": 4.810,
+      "final_arm_error_rms_rad": 0.1,
+      "final_omega1_rms_rad_s": 0.05
+    },
+    "training_randomized": {
+      "swingup_current_change_rms_A": 0.03566,
+      "swingup_current_total_variation_A": 7.273,
+      "arm_excursion_rad": 1.600,
+      "omega1_rms_rad_s": 1.779,
+      "omega2_rms_rad_s": 4.553,
+      "final_arm_error_rms_rad": 0.1,
+      "final_omega1_rms_rad_s": 0.05
+    },
+    "downward_rest_randomized": {
+      "swingup_current_change_rms_A": 0.04096,
+      "swingup_current_total_variation_A": 9.842,
+      "arm_excursion_rad": 1.678,
+      "omega1_rms_rad_s": 2.565,
+      "omega2_rms_rad_s": 5.327,
+      "final_arm_error_rms_rad": 0.1,
+      "final_omega1_rms_rad_s": 0.05
+    }
+  },
+  "rationale": "Hard reliability gates are absolute. Mean trajectory limits are 15 percent above the matched 2.6M selection means; final settling uses fixed physical limits."
+}

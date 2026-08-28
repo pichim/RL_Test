@@ -1,0 +1,63 @@
+{
+  "artifact_version": "stage3c_half_rps_v0",
+  "status": "simulation_holdout_passed_hardware_validation_pending",
+  "task_version": "matlab_hardware_sac_pure_v0",
+  "model_sha256": "ce2371e3f57107ae755fe5c6b8317129c5386e8cc96f9bc9f94d6f9282d63fbf",
+  "source_git_commit": "0b0fa42d278916da1613bd18e744df704faa9a18",
+  "source_recipe": {
+    "path": "experiments/stage3c_half_rps_v0.json",
+    "sha256": "ae00972dd2c127a97a598cba8edc3a0812b69bdb74e9f7b300afa2d594c9e0b8"
+  },
+  "canonical_reproduction_recipe": {
+    "path": "experiments/stage3c_half_rps_selected_v0.json",
+    "sha256": "ba67bd6c746f09b3411091bae314085bdc2062aeceeaf12aafdb4835b56a1816",
+    "training_settings_changed": false,
+    "additional_retained_resume_milestone": 2600000
+  },
+  "source_checkpoint": "src/runs/reproduce_stage3c_half_rps_v0_seed0_stage3c/checkpoints/sac_2600000_steps.zip",
+  "selected_num_timesteps": 2600000,
+  "stage3c_adaptation_steps": 1100000,
+  "training_curriculum_scale": 1.0,
+  "evaluation_curriculum_scale": 1.0,
+  "selection_seed_range": [10000, 10299],
+  "holdout_seed_range": [70000, 70299],
+  "nominal80_seed_range": [90000, 90299],
+  "selection_evaluation": {
+    "sac_successes": [100, 100, 100],
+    "hybrid_successes": [100, 100, 100],
+    "unsafe_episodes": 0
+  },
+  "holdout_evaluation": {
+    "sac_successes": [100, 100, 100],
+    "hybrid_successes": [100, 100, 100],
+    "unsafe_episodes": 0,
+    "predeclared_mean_limits_passed": true,
+    "accepted": true
+  },
+  "nominal80_no_delay_evaluation": {
+    "sac_successes": [100, 100, 100],
+    "hybrid_successes": [100, 100, 100],
+    "unsafe_episodes": 0,
+    "accepted": true
+  },
+  "stress_evaluation": null,
+  "hardware_ready": false,
+  "release_replay_buffer_included": false,
+  "canonical_recipe_retains_selected_replay_buffer": true,
+  "files": {
+    "model.zip": "ce2371e3f57107ae755fe5c6b8317129c5386e8cc96f9bc9f94d6f9282d63fbf",
+    "config.json": "b54726b997be10decfb964bdafa50a5de0249e24bb06d980966a2498253271eb",
+    "training.json": "5b41882eca7eec89e987999ba60b88fbf884dccd7e5ee9d73fab1446686699a9",
+    "acceptance.json": "ffd73702a394fadea5dadb6c87dc911d0ea5b31a3d465a1599f54caf5c491174",
+    "nominal80_no_delay_config.json": "1ff753a9a8957b2cbde49732d231a713e133bf42fe69399b79d0e8d084b323e2",
+    "nominal80_no_delay_protocol.json": "b8a101cedef6adea63729aa3d8d9685e9b2f2abcdf20603d1fe3163bd1936baa",
+    "selection_report.json": "45a68d7b17e750e655b079fcc3fdde58bedeb9bb152dcfb210b40db6bdbc7cf3",
+    "holdout_report.json": "5bd7021a0d2322f1e2bb55c61c890915c89a9db34b24c57993415c6ea6f94cf4",
+    "nominal80_no_delay_report.json": "16c21f64d1ac22937b49a8a74d34f78f8a516ae676dc41f59f72f917445b7b36",
+    "evidence/selection_sac_summary.csv": "bef1593b514cbbbf455f1b51961af5889b258976dba7ffb73bcd0d722a637123",
+    "evidence/selection_hybrid_summary.csv": "98a44a82e49d7c768d30c115c8a614e3684213313387c68b1093ab7128599948",
+    "evidence/holdout_sac_summary.csv": "e76bbd8bd561327492c2bfc387ec37f0b39469e9dbf6935cf65d61bef6c62b3b",
+    "evidence/holdout_hybrid_summary.csv": "9672cde76f19849117a62eb19a7c54285d4c0e9d9afaafaed4251d34e3223ee8",
+    "evidence/nominal80_no_delay_summary.csv": "d975801d3398b7e727722a3c604e7438e1b78cc42ad667fc64c5271c0965cd90"
+  }
+}

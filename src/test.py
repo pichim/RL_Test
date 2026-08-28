@@ -66,6 +66,12 @@ from reproduce import (
     load_recipe,
     stage_run_dir,
 )
+from qualify import (
+    MODEL_PATH as QUALIFICATION_MODEL_PATH,
+    build_suite_command,
+    verify_frozen_evidence,
+    verify_release,
+)
 from stress_evaluate import (
     corner_cases,
     long_duration_cases,
@@ -485,6 +491,18 @@ class FurutaContinuousTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "current task version"):
                 load_run_config(model_path, None)
 
+            milestone = run_dir / "milestones" / "state_000000000100"
+            milestone.mkdir(parents=True)
+            nested_model = milestone / "model.zip"
+            nested_model.touch()
+            config_path.write_text(
+                json.dumps(asdict(DEFAULT_CONFIG)),
+                encoding="utf-8",
+            )
+            loaded, resolved = load_run_config(nested_model, None)
+            self.assertEqual(loaded, DEFAULT_CONFIG)
+            self.assertEqual(resolved, config_path)
+
     def test_parameter_randomization_ranges(self) -> None:
         rng = np.random.default_rng(3)
         for _ in range(100):
@@ -841,11 +859,11 @@ class FurutaContinuousTests(unittest.TestCase):
         self.assertIsNone(evaluate_main.__defaults__[7])
         self.assertEqual(
             MODEL_PATH.parent.name,
-            "stage3b_v0",
+            "stage3c_half_rps_v0",
         )
         self.assertEqual(
             RESULTS_DIR.name,
-            "evaluation_stage3b_v0",
+            "evaluation_stage3c_half_rps_v0",
         )
 
     def test_half_rps_recipe_is_complete_and_resumable(self) -> None:
@@ -862,11 +880,36 @@ class FurutaContinuousTests(unittest.TestCase):
         command = build_stage_command(recipe, stage, seed=2)
         self.assertIn("--curriculum-model", command)
         self.assertIn("--resume-milestone-timesteps", command)
+        milestone_index = command.index("--resume-milestone-timesteps")
+        self.assertEqual(
+            command[milestone_index + 1 : milestone_index + 3],
+            ["2400000", "2600000"],
+        )
         omega_index = command.index(
             "--randomized-reset-omega1-half-range-rps"
         )
         self.assertEqual(command[omega_index + 1], "0.5")
         self.assertIn("seed2", str(stage_run_dir(stage, 2)))
+
+    def test_selected_release_and_qualification_commands(self) -> None:
+        manifest = verify_release()
+        verify_frozen_evidence()
+        self.assertEqual(manifest["selected_num_timesteps"], 2_600_000)
+        self.assertEqual(
+            manifest["model_sha256"],
+            "ce2371e3f57107ae755fe5c6b8317129c5386e8cc96f9bc9f94d6f9282d63fbf",
+        )
+        command = build_suite_command("holdout")
+        self.assertEqual(
+            command[command.index("--model") + 1],
+            str(QUALIFICATION_MODEL_PATH),
+        )
+        self.assertEqual(command[command.index("--base-seed") + 1], "70000")
+        nominal_command = build_suite_command("nominal80")
+        self.assertEqual(
+            nominal_command[nominal_command.index("--base-seed") + 1],
+            "90000",
+        )
 
     def test_training_settings_validate_retained_resume_milestones(self) -> None:
         settings = algorithm_settings(

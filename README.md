@@ -43,7 +43,7 @@ numbering sequence.
 ```text
 stage 1: encoder state -> SAC at 200 Hz -> held current -> nominal plant
 stage 2: encoder state -> SAC -> hidden continuous 100 Hz response -> nominal plant
-stage 3b: encoder state -> SAC -> hidden 0--1 sample delay
+stage 3c: encoder state -> SAC -> hidden 0--1 sample delay
                                -> hidden 50--100 Hz response -> randomized plant
 
 evaluation: SAC-only full episode
@@ -53,12 +53,12 @@ evaluation: SAC-only full episode
 The mechanical simulation uses a 1 kHz RK4 grid. Each SAC current command is
 held for five plant steps. Stage 1 applies it directly. Stages 2 and 3 use
 `di/dt = 2*pi*f_c*(i_command - i)`: Stage 2 fixes `f_c = 100 Hz`, while
-Stage 3b samples it from the active curriculum interval. This state is
+Stage 3c samples it from the active curriculum interval. This state is
 integrated jointly with the mechanics at every RK4 stage but is not added to
 the SAC observation. It represents unobserved actuator uncertainty, not a
-deployment slew limiter. Hardware LQR current control is intended to run at 10 kHz, so
-evaluation recomputes LQR feedback directly at the RK4 stages and always
-bypasses both uncertainty models. In hybrid evaluation, delay and filtering
+deployment slew limiter. Hardware LQR current control is intended to run at
+10 kHz, so evaluation recomputes LQR feedback directly at the RK4 stages and
+always bypasses both uncertainty models. In hybrid evaluation, delay and filtering
 are active only during the SAC portion and are removed at LQR handover. A
 delay sample is one 200 Hz policy period (`5 ms`), not one 1 kHz integration
 step. The delay and actuator state are deliberately absent from the SAC
@@ -130,14 +130,15 @@ resets cover a broad safe state distribution: the arm angle is uniform in
 `[-pi, pi]`, and both velocities are uniform in `[-2, 2] rad/s`. The arm range
 retains margin to its `+/-5*pi/8` travel limit.
 
-Stages 1 and 2 train on the nominal plant. Stage 3b is a continuation curriculum
+Stages 1 and 2 train on the nominal plant. Stage 3c is a continuation curriculum
 whose uncertainty fraction ramps linearly for one million decisions and then
-stays at full range for another million. At full range, motor torque, both
-masses, both rotary inertias, and both damping coefficients vary independently
+stays at full range for the remaining 500,000 decisions. At full range, motor
+torque, both masses, both rotary inertias, and both damping coefficients vary independently
 by `+/-10%`; the RL current-filter cutoff varies uniformly from `50` to
 `100 Hz`; and the hidden RL action delay is sampled from `0` or `1`
-policy period. The arm and pendulum reset-velocity half-ranges widen from the
-nominal `2 rad/s` to `1.5 rotations/s` (`3*pi rad/s`). The final 500,000
+policy period. The arm reset-velocity half-range widens from the nominal
+`2 rad/s` to `0.5 rotations/s` (`pi rad/s`); the pendulum range widens to
+`1.5 rotations/s` (`3*pi rad/s`). The final 500,000
 decisions use learning rate `1e-4` instead of `3e-4`. The deterministic
 checkpoint callback remains nominal in every stage so scores are comparable;
 the standalone evaluator always tests nominal and full-range randomized cases.
@@ -222,9 +223,11 @@ src/furuta_env.py    observation, reward, randomized plant, and training success
 src/controllers.py   relative-angle LQR and hybrid supervisor
 src/train.py         scratch, actor-transfer, exact resume, or curriculum training
 src/evaluate.py      matched SAC-only and hybrid evaluation
+src/qualify.py       hash-checked frozen Stage-3c qualification protocols
 src/stress_evaluate.py deterministic corner and long-duration evaluation
 src/test.py          focused dynamics, task, handover, LQR, and smoke tests
-models/stage3b_v0/   frozen selected simulation controller and manifest
+models/stage3c_half_rps_v0/ selected controller, protocols, and evidence
+models/stage3b_v0/   superseded historical controller and failed holdouts
 .vscode/launch.json  one-click scratch, transfer, resume, and evaluation profiles
 ```
 
@@ -286,172 +289,61 @@ python src/train.py \
 
 This changes only the RL current path. The plant remains nominal.
 
-### Stage 3b: refined gradual uncertainty curriculum
+### Stage 3c: canonical gradual uncertainty curriculum
 
-Stage 3b restores the complete selected Stage-2 learner and replay buffer. It
-ramps the complete uncertainty set from zero to full range during the first
-million additional decisions, holds full range for the second million, and
-uses the reduced learning rate only during the last 500,000 decisions:
-
-```bash
-python src/train.py \
-  --curriculum-model src/runs/sac_200hz_matlab_pure_actor8_critic64_stage2_filter100_v0_selected_to1500k/resume \
-  --timesteps 2000000 \
-  --current-filter-cutoff-hz 100 \
-  --current-filter-cutoff-range-hz 50 100 \
-  --parameter-randomization \
-  --motor-torque-randomization 0.10 \
-  --arm-mass-randomization 0.10 \
-  --arm-inertia-randomization 0.10 \
-  --pendulum-mass-randomization 0.10 \
-  --pendulum-inertia-randomization 0.10 \
-  --arm-damping-randomization 0.10 \
-  --pendulum-damping-randomization 0.10 \
-  --action-dead-time-max-samples 1 \
-  --randomized-reset-omega1-half-range-rps 1.5 \
-  --randomized-reset-omega2-half-range-rps 1.5 \
-  --curriculum-ramp-steps 1000000 \
-  --curriculum-final-learning-rate 0.0001 \
-  --curriculum-final-learning-rate-steps 500000 \
-  --seed 0 \
-  --run-dir src/runs/sac_200hz_matlab_pure_actor8_critic64_stage3b_curriculum_filter50to100_delay1_vel15rps_seed0_v0
-```
-
-At curriculum scale zero, the source controller sees its original nominal
-Stage-2 task: fixed `100 Hz` response, zero delay, nominal mechanics, and
-`+/-2 rad/s` reset velocities. At scale one it sees the full ranges above.
-Mechanical scales, cutoff, delay, and initial state are independently sampled
-for every episode. SAC's actor, critics, target critics, optimizers, entropy
-state, replay, and timestep count all continue from the selected source.
-This refined run starts from the Stage-2 source again, not from the completed
-Stage-3a final learner. Relative to Stage 3a, only the cutoff interval, maximum
-delay, and two reset-velocity bounds change; reward, network, seed, mechanical
-ranges, ramp, hold, and learning-rate schedule remain fixed.
-TensorBoard records `curriculum/randomization_scale` and
-`curriculum/learning_rate`. Start it with:
+The canonical runner restores the complete Stage-2 learner and replay buffer,
+ramps all uncertainty from zero to full range over one million decisions, then
+uses learning rate `1e-4` for the final 500,000 decisions. It retains complete
+resume states at the 2.4M comparison point and the selected 2.6M point:
 
 ```bash
-tensorboard --logdir src/runs/sac_200hz_matlab_pure_actor8_critic64_stage3b_curriculum_filter50to100_delay1_vel15rps_seed0_v0/tensorboard
+python src/reproduce.py --all --seed 0
+python src/reproduce.py --all --seed 0 --execute
 ```
 
-After completion, evaluate the full-range final learner first:
+The first command is a dry run that prints all three exact training commands.
+The second executes them. The recipe is
+`experiments/stage3c_half_rps_selected_v0.json`; it uses a nominal 100 Hz Stage
+2, then independent `+/-10%` mechanical uncertainty, 50--100 Hz RL filter
+uncertainty, zero/one policy-sample delay, arm reset velocity up to
+`+/-0.5 rotations/s`, and pendulum reset velocity up to
+`+/-1.5 rotations/s`.
+
+TensorBoard records the curriculum scale and learning rate:
 
 ```bash
-python src/evaluate.py \
-  --model src/runs/sac_200hz_matlab_pure_actor8_critic64_stage3b_curriculum_filter50to100_delay1_vel15rps_seed0_v0/final/model.zip \
-  --results-dir src/runs/evaluation_200hz_matlab_pure_actor8_critic64_stage3b_curriculum_filter50to100_delay1_vel15rps_seed0_v0_final
+tensorboard --logdir src/runs/reproduce_stage3c_half_rps_selected_v0_seed0_stage3c/tensorboard
 ```
 
-The nominal best-model callback cannot by itself select the most robust
-curriculum checkpoint. If the final learner regresses, evaluate the saved
-1.6M/1.7M/... absolute-timestep curriculum checkpoints with separate result
-directories before choosing a controller.
+### Selected Stage-3c 2.6M controller
 
-### Frozen Stage-3b controller and finalization
+Matched checkpoint screening selected absolute timestep 2.6M. It was the only
+screened checkpoint with 100/100 successes in nominal, randomized broad, and
+randomized downward-rest SAC modes and zero unsafe episodes. Every 2.7M--3.0M
+checkpoint regressed on at least one matched seed. Both SAC and hybrid achieved
+300/300 selection successes and 300/300 unseen robust-holdout successes, with
+zero unsafe episodes. The fixed nominal-plant, 80 Hz, no-delay suite also passed
+300/300 for each controller.
 
-The final 3.5M learner regressed, so checkpoint screening selected the absolute
-2.4M policy: 900,000 Stage-3b decisions after the Stage-2 source. It had reached
-curriculum scale `0.9`, corresponding to `+/-9%` mechanical scales, a
-`55--100 Hz` filter interval, reset velocities of approximately
-`+/-1.38 rotations/s`, and a one-sample delay in approximately 45% of training
-episodes. Standalone evaluation deliberately used the complete configured
-`+/-10%`, `50--100 Hz`, `+/-1.5 rotations/s`, and `0--1` sample envelope.
-
-The selected policy achieved 300/300 SAC-only and 300/300 hybrid successes with
-no unsafe episode on selection seeds `10000--10299`. It is frozen under
-`models/stage3b_v0/`; the manifest records its source, hashes, training scale,
-and evaluation evidence. It has no replay buffer and is an evaluation/deployment
-candidate, not an exactly resumable learner. No further SAC training is part of
-the fast finalization path.
-
-The selection seeds are no longer an unbiased final test. Run the untouched
-holdout once, SAC first:
+The immutable actor, exact configuration, source training metadata, acceptance
+gate, reports, and raw summary tables are frozen under
+`models/stage3c_half_rps_v0/`. Re-run both qualification protocols with:
 
 ```bash
-python src/evaluate.py \
-  --controller sac \
-  --episodes 100 \
-  --base-seed 50000 \
-  --results-dir src/runs/evaluation_stage3b_v0_holdout_sac
+python src/qualify.py --suite all
+python src/qualify.py --suite all --execute
 ```
 
-If that passes all three modes with zero unsafe episodes, run the hybrid on the
-identical states:
+The runner verifies all release hashes, uses the frozen seed ranges and
+configurations, and checks the resulting summaries against the predeclared
+requirements. The selected release actor itself has no replay buffer. Exact
+continuation uses the complete 2.6M milestone created by the canonical recipe;
+never combine this actor with the 3.0M replay buffer.
 
-```bash
-python src/evaluate.py \
-  --controller hybrid \
-  --episodes 100 \
-  --base-seed 50000 \
-  --results-dir src/runs/evaluation_stage3b_v0_holdout_hybrid
-```
-
-Then run deterministic endpoint and 30-second drift tests:
-
-```bash
-python src/stress_evaluate.py \
-  --profile both \
-  --controller both \
-  --long-duration 30 \
-  --results-dir src/runs/stress_stage3b_v0
-```
-
-The first untouched SAC holdout has now been run. It achieved `100/100`
-nominal, `99/100` randomized broad, and `100/100` randomized downward-rest
-success. Broad seed `50116` was unsafe and therefore failed the predeclared
-hard gate. It began at arm angle `-1.203 rad` with outward arm velocity
-`-8.181 rad/s`, one-sample delay, and an `83.4 Hz` cutoff. The arm crossed its
-negative limit after `0.162 s`; hybrid reproduces the same failure before
-handover. The full hybrid holdout and stress suite were intentionally not run
-after the hard gate failed. This seed is now a permanent regression case and
-must not be removed from future evaluation.
-
-### Restricted half-revolution/s operational envelope
-
-The first hardware-facing qualification restricts randomized initial arm speed
-to `+/-0.5 rotations/s` (`+/-pi rad/s`). This is an evaluation and engagement
-envelope; it does not rewrite the frozen Stage-3b model or erase the failed
-broad holdout. Pendulum reset velocity remains `+/-1.5 rotations/s`, and the
-mechanical, filter, and delay ranges remain unchanged.
-
-The second protocol was frozen before execution in
-`models/stage3b_v0/acceptance_half_rps_v1.json`. Its unseen SAC command is:
-
-```bash
-python src/evaluate.py \
-  --controller sac \
-  --episodes 100 \
-  --base-seed 60000 \
-  --randomized-arm-velocity-half-range-rps 0.5 \
-  --results-dir src/runs/evaluation_stage3b_v0_half_rps_v1_sac
-```
-
-If SAC passes all predeclared gates, run the identical seed ranges with
-`--controller hybrid` and a new results directory. The deployment engagement
-guard must still combine arm position and outward velocity: a speed limit alone
-does not guarantee adequate stopping distance near the travel boundary.
-
-This restricted SAC holdout has now been executed. Randomized half-rps and
-randomized downward-rest modes both passed `100/100` with no unsafe episode,
-but nominal seed `60066` was unsafe, giving `99/100` nominal. It started near
-upright at arm angle `+0.985 rad`, arm velocity `+1.906 rad/s`
-(`0.303 rotations/s`), and pendulum velocity `-1.981 rad/s` on the nominal
-plant. SAC drove outward and crossed the positive arm limit after `0.276 s`.
-Hybrid reproduces the failure before handover. The full hybrid holdout and
-stress suite were therefore not run. The result is frozen in
-`models/stage3b_v0/holdout_half_rps_v1_report.json`.
-
-Consequently, `+/-0.5 rotations/s` is a useful reset bound but not a sufficient
-hardware engagement rule. A valid rule must include arm position and outward
-velocity and should distinguish the intended downward-rest hardware start from
-arbitrary near-upright states.
-
-The corner profile combines both adverse `+/-10%` parameter endpoints with
-exactly `50/100 Hz`, exactly zero/one delay sample, downward starts, near-reset
-arm-angle starts at nominal outward velocity, and maximum reset velocities at
-the arm center. It intentionally does not combine a near-travel-limit arm with
-maximum outward speed, because that may have insufficient physical stopping
-distance and should not be mislabeled as an ordinary controller failure.
+The older `models/stage3b_v0/` release and its failed holdouts remain preserved
+as historical regression evidence. The current release has passed stochastic
+simulation qualification but not deterministic stress or hardware validation,
+so it is not yet marked hardware-ready.
 
 The four initialization modes are deliberately separate:
 
@@ -532,19 +424,20 @@ original absolute ramp and learning-rate boundaries are restored from
 
 ### Reproduce the complete ancestry
 
-The actual selected-policy ancestry is Stage 2 at 100 Hz from scratch to
-`1.0M`, an exact Stage-2 resume to `1.5M`, then the Stage-3b uncertainty
-curriculum. Stage 1 is a comparison baseline, not an ancestor of Stage 3b.
+The selected-policy ancestry is Stage 2 at 100 Hz from scratch to `1.0M`, an
+exact Stage-2 resume to `1.5M`, then the Stage-3c uncertainty curriculum to
+3.0M. Stage 1 is a comparison baseline, not an ancestor of Stage 3c.
 
-Two immutable recipes now describe the training chain:
+Three tracked recipes describe the history and canonical reconstruction:
 
 - `experiments/reproduce_stage3b_v0.json` reproduces the historical Stage-3b
   settings and retains a paired state at the selected absolute `2.4M` step.
-- `experiments/stage3c_half_rps_v0.json` is the proposed definitive chain. It
-  changes only the Stage-3 randomized initial arm velocity to
-  `+/-0.5 rotations/s`, retains pendulum velocity at `+/-1.5 rotations/s`,
-  reaches the full uncertainty envelope after `1.0M` curriculum decisions,
-  then refines for `0.5M` decisions at learning rate `1e-4`.
+- `experiments/stage3c_half_rps_v0.json` is the immutable executed recipe that
+  produced the selected 2.6M actor and the evaluated 3.0M final learner.
+- `experiments/stage3c_half_rps_selected_v0.json` is the default canonical
+  reconstruction. Its learning settings are identical to the executed recipe,
+  but it uses fresh directories and retains complete model/replay states at
+  both 2.4M and the selected 2.6M boundary.
 
 Display the full seed-0 chain without training:
 
@@ -570,6 +463,20 @@ flag, Python/Conda environment, core package versions, parent hashes, and final
 artifact hashes in `training.json`. `environment.yml` recreates the supported
 Conda environment; the per-run provenance captures the exact versions used.
 
+After reproduction, compare the generated 2.6M actor with the frozen release:
+
+```bash
+sha256sum \
+  src/runs/reproduce_stage3c_half_rps_selected_v0_seed0_stage3c/checkpoints/sac_2600000_steps.zip \
+  models/stage3c_half_rps_v0/model.zip
+```
+
+The reference seed-0 release hash is
+`ce2371e3f57107ae755fe5c6b8317129c5386e8cc96f9bc9f94d6f9282d63fbf`.
+Exact byte equality is expected in the recorded environment and commit; other
+hardware or library builds may not be bitwise deterministic and must still pass
+the frozen qualification protocols.
+
 For independent evidence, repeat the entire recipe with seeds `1` and `2`.
 Sharing one Stage-2 source between all seeds tests only curriculum adaptation;
 it is not an independent end-to-end reproduction.
@@ -580,22 +487,21 @@ Select the `rl-env` Conda interpreter once. Open **Run and Debug** and choose:
 
 - `Train stage 1: arm velocity 0.015 (default)`;
 - `Train stage 2: add 100 Hz filter`;
-- `Train stage 3b: refined curriculum seed 0`;
+- `Train stage 3b: refined curriculum seed 0` is retained as a historical
+  experiment profile;
 - `Train: actor transfer (edit paths)` to copy actor weights;
 - `Train: full resume (edit paths)` to restore the complete learner;
-- `Evaluate selected stage3b_v0: SAC and hybrid`;
-- the two `Finalize stage3b_v0` holdout profiles, SAC first;
-- `Finalize stage3b_v0: corner and 30 s stress`.
-- `Qualify stage3b_v0: half-rps holdout SAC` for the predeclared restricted
-  envelope;
+- `Evaluate selected Stage3c 2.6M: selection seeds`;
+- `Qualify selected Stage3c: show frozen protocols` or `execute all`;
+- `Stress selected Stage3c: corners and 30 s`;
 - the `Reproduce Stage3c half-rps` profiles to inspect or execute each tracked
   training stage;
-- `Continue completed Stage3c half-rps: exact +500k` to resume its complete
-  final learner without changing the task.
+- `Continue reproduced selected 2.6M: exact +500k` to resume the retained
+  selected learner without changing the task.
 
-For the two continuation profiles, edit the source and fresh destination paths
-in `.vscode/launch.json` before starting. The launch profiles are simply the
-documented command-line flags in a form that does not require typing a terminal
+For editable transfer or resume profiles, check the source and fresh destination
+paths in `.vscode/launch.json` before starting. The launch profiles are simply
+the documented command-line flags in a form that does not require typing a terminal
 command. **Run Python File** on `src/train.py` still runs the scratch default.
 
 Trace learning with:
@@ -639,8 +545,8 @@ seeds.
 
 ## Evaluate
 
-The default evaluator now uses the frozen `models/stage3b_v0/model.zip` and its
-full-scale configuration:
+The default evaluator uses the frozen `models/stage3c_half_rps_v0/model.zip`
+and its full-scale configuration:
 
 ```bash
 python src/evaluate.py
@@ -649,13 +555,13 @@ python src/evaluate.py
 The combined SAC-only and hybrid results are written to:
 
 ```text
-src/runs/evaluation_stage3b_v0
+src/runs/evaluation_stage3c_half_rps_v0
 ```
 
 Generated training and evaluation directories under `src/runs/` are ignored
 by Git because models, replay buffers, plots, and traces are large generated
-artifacts. The small frozen controller under `models/stage3b_v0/` is the
-intentional canonical exception and contains no replay buffer. Keep full runs
+artifacts. The small frozen controller under `models/stage3c_half_rps_v0/` is
+the intentional canonical exception and contains no replay buffer. Keep full runs
 and result archives in dedicated artifact storage (or Git LFS if chosen
 explicitly).
 
@@ -774,8 +680,9 @@ identical to the fully evaluated historical 1.5M checkpoint. Use this rolling
 snapshot, rather than the run's post-callback `final/model.zip`, as the
 curriculum source.
 
-The selected policy is a curriculum starting point, not yet a hardware-ready
-controller. Relative to the direct-current stage-1 reference it improves arm
+This historical selected Stage-2 policy was a curriculum starting point, not a
+hardware-ready controller. Relative to the direct-current stage-1 reference it
+improves arm
 excursion, arm-speed RMS, post-capture arm motion, and final arm speed, but has
 higher current RMS, requested-current changes and total variation, and higher
 pendulum-speed RMS. The 100 Hz response smooths applied current; it must not be
@@ -802,18 +709,18 @@ downward-rest success, with nine unsafe broad resets. Stratifying identical
 evaluation episodes isolated two issues: every non-unsafe 0 or 5 ms broad-reset
 episode succeeded, while only 11/26 safe 10 ms episodes succeeded; all nine
 unsafe episodes began above `8 rad/s`, often near a travel limit and moving
-outward. Stage 3b therefore restarts from the same selected Stage-2 source with
-`50--100 Hz`, `0--1` delay samples, and `+/-1.5 rotations/s`. It does not resume
-the rougher Stage-3a final policy.
+outward. Stage 3b therefore restarted from the same selected Stage-2 source
+with `50--100 Hz`, `0--1` delay samples, and `+/-1.5 rotations/s`; Stage 3c
+subsequently reduced only the randomized arm-velocity envelope to
+`+/-0.5 rotations/s` and was reproduced end to end.
 
-The selected Stage-3b seed-0 controller passed the complete selection
-evaluation and is being finalized through an untouched holdout and deterministic
-stress suite. Adaptation seeds 1 and 2 remain useful research confirmation, but
-are deferred because they do not improve the already selected controller.
-Those branches would share the pretraining history and therefore test
-curriculum-adaptation repeatability, not the full training pipeline. A
-hardware-facing statistical claim still requires independent end-to-end seeds
-or equivalent evidence in addition to holdout simulation.
+The selected Stage-3c 2.6M controller passed matched selection and untouched
+holdout evaluation for both SAC and hybrid, including the fixed nominal 80 Hz,
+no-delay suite. Adaptation-only seeds would share the pretraining history and
+would therefore not prove the complete chain. Independent end-to-end seeds 1
+and 2 remain the appropriate statistical confirmation before making a broad
+training-repeatability claim. Deterministic stress and hardware validation also
+remain required before deployment.
 
 For sim-to-real work, prioritize measured system identification over widening
 randomization blindly. Estimate the current-loop response, torque constant,

@@ -1,0 +1,24 @@
+{
+  "protocol": "stage3c_half_rps_v0_seed0_2600k_holdout_v0",
+  "model_sha256": "ce2371e3f57107ae755fe5c6b8317129c5386e8cc96f9bc9f94d6f9282d63fbf",
+  "base_seed": 70000,
+  "episodes_per_mode": 100,
+  "mode_order": [
+    "training_nominal",
+    "training_randomized",
+    "downward_rest_randomized"
+  ],
+  "sac": {
+    "successes": [100, 100, 100],
+    "unsafe": [0, 0, 0],
+    "captures": [100, 100, 100],
+    "all_predeclared_mean_limits_passed": true
+  },
+  "hybrid": {
+    "successes": [100, 100, 100],
+    "unsafe": [0, 0, 0],
+    "captures": [100, 100, 100]
+  },
+  "hard_gate_passed": true,
+  "decision": "accepted_for_next_hardware_readiness_tests"
+}
