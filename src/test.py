@@ -55,6 +55,7 @@ from train import (
     atomic_write_json,
     curriculum_scale,
     find_run_file,
+    remove_directory_best_effort,
     resolve_resume_model,
     resolve_resume_replay_buffer,
     save_committed_state,
@@ -289,6 +290,28 @@ class FurutaContinuousTests(unittest.TestCase):
             self.assertEqual(rename_calls, 2)
             sleep.assert_called_once_with(0.25)
             self.assertTrue((destination / "state.json").is_file())
+
+    def test_stale_state_cleanup_retries_transient_directory_lock(self) -> None:
+        with TemporaryDirectory() as directory:
+            stale = Path(directory) / "snapshot_old"
+            stale.mkdir()
+            real_rmtree = __import__("shutil").rmtree
+            remove_calls = 0
+
+            def transient_lock(path: Path) -> None:
+                nonlocal remove_calls
+                remove_calls += 1
+                if remove_calls == 1:
+                    raise PermissionError(32, "file is being used by another process")
+                real_rmtree(path)
+
+            with patch("train.shutil.rmtree", side_effect=transient_lock):
+                with patch("train.time.sleep") as sleep:
+                    remove_directory_best_effort(stale)
+
+            self.assertEqual(remove_calls, 2)
+            sleep.assert_called_once_with(0.25)
+            self.assertFalse(stale.exists())
 
     def test_model_equilibria_and_energy_diagnostic(self) -> None:
         plant = FurutaPendulum(DEFAULT_CONFIG.sample_time)

@@ -139,6 +139,21 @@ def publish_directory(source: Path, destination: Path) -> None:
             time.sleep(0.25)
 
 
+def remove_directory_best_effort(path: Path) -> None:
+    """Remove stale state without failing training on transient file locks."""
+    for attempt in range(60):
+        try:
+            shutil.rmtree(path)
+            return
+        except FileNotFoundError:
+            return
+        except PermissionError:
+            if attempt == 59:
+                print(f"warning: could not remove stale state: {path}")
+                return
+            time.sleep(0.25)
+
+
 def runtime_provenance() -> dict:
     """Capture the code and Python environment needed to interpret a run."""
     try:
@@ -212,7 +227,7 @@ def save_committed_state(model: SAC, destination: Path) -> None:
         publish_directory(temporary, destination)
     finally:
         if temporary.exists():
-            shutil.rmtree(temporary)
+            remove_directory_best_effort(temporary)
 
 
 def resolve_resume_replay_buffer(
@@ -439,7 +454,7 @@ class ResumeStateCallback(BaseCallback):
             # cannot invalidate the published snapshot.
             for candidate in self.save_path.glob("snapshot_*"):
                 if candidate != snapshot and candidate.is_dir():
-                    shutil.rmtree(candidate)
+                    remove_directory_best_effort(candidate)
             self._last_save_call = self.n_calls
             if self.verbose >= 1:
                 print(f"saved rolling resume state: {snapshot}")
