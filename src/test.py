@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, replace
 import json
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -250,6 +251,44 @@ class FurutaContinuousTests(unittest.TestCase):
                 save_committed_state(FailingModel(), incomplete)
             self.assertFalse(incomplete.exists())
             self.assertEqual(list(root.glob(".incomplete-*")), [])
+
+    def test_committed_state_retries_transient_directory_lock(self) -> None:
+        class FakeReplayBuffer:
+            @staticmethod
+            def size() -> int:
+                return 1
+
+        class FakeModel:
+            num_timesteps = 1
+            replay_buffer = FakeReplayBuffer()
+
+            @staticmethod
+            def save(path: Path) -> None:
+                path.write_bytes(b"model")
+
+            @staticmethod
+            def save_replay_buffer(path: Path) -> None:
+                path.write_bytes(b"replay")
+
+        real_rename = os.rename
+        rename_calls = 0
+
+        def transient_lock(source: Path, destination: Path) -> None:
+            nonlocal rename_calls
+            rename_calls += 1
+            if rename_calls == 1:
+                raise PermissionError(32, "file is being used by another process")
+            real_rename(source, destination)
+
+        with TemporaryDirectory() as directory:
+            destination = Path(directory) / "final"
+            with patch("train.os.rename", side_effect=transient_lock):
+                with patch("train.time.sleep") as sleep:
+                    save_committed_state(FakeModel(), destination)
+
+            self.assertEqual(rename_calls, 2)
+            sleep.assert_called_once_with(0.25)
+            self.assertTrue((destination / "state.json").is_file())
 
     def test_model_equilibria_and_energy_diagnostic(self) -> None:
         plant = FurutaPendulum(DEFAULT_CONFIG.sample_time)

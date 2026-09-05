@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 import numpy as np
 from stable_baselines3 import SAC
@@ -126,6 +127,18 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def publish_directory(source: Path, destination: Path) -> None:
+    """Publish a directory despite transient Windows file-indexing locks."""
+    for attempt in range(60):
+        try:
+            source.rename(destination)
+            return
+        except PermissionError:
+            if destination.exists() or attempt == 59:
+                raise
+            time.sleep(0.25)
+
+
 def runtime_provenance() -> dict:
     """Capture the code and Python environment needed to interpret a run."""
     try:
@@ -196,7 +209,7 @@ def save_committed_state(model: SAC, destination: Path) -> None:
             + "\n",
             encoding="utf-8",
         )
-        temporary.rename(destination)
+        publish_directory(temporary, destination)
     finally:
         if temporary.exists():
             shutil.rmtree(temporary)
