@@ -20,6 +20,7 @@ from evaluate import (
     DEFAULT_EPISODES,
     MODEL_PATH,
     RESULTS_DIR,
+    evaluation_modes,
     load_run_config,
     main as evaluate_main,
     make_episode,
@@ -53,6 +54,7 @@ from furuta_model import FurutaPendulum
 from train import (
     algorithm_settings,
     atomic_write_json,
+    checkpoint_selection_score,
     curriculum_scale,
     find_run_file,
     remove_directory_best_effort,
@@ -121,9 +123,10 @@ class FurutaContinuousTests(unittest.TestCase):
         self.assertEqual(settings["target_update_interval"], 1)
         self.assertEqual(settings["entropy_coefficient"], "auto_0.1")
         self.assertEqual(settings["evaluation_seed"], 10_000)
+        self.assertEqual(settings["evaluation_episodes"], 50)
         self.assertEqual(
             settings["best_model_selection"],
-            "success_rate_then_longer_episode_then_mean_reward",
+            "success_rate_then_mean_reward",
         )
         self.assertEqual(settings["actor_network"], [8, 8])
         self.assertEqual(settings["critic_network"], [64, 64])
@@ -135,6 +138,22 @@ class FurutaContinuousTests(unittest.TestCase):
         self.assertEqual(settings["resume_milestone_timesteps"], [])
         with self.assertRaisesRegex(ValueError, "must be even"):
             algorithm_settings(DEFAULT_CONFIG, total_timesteps=999_999)
+        self.assertEqual(
+            algorithm_settings(
+                DEFAULT_CONFIG,
+                evaluation_episodes=12,
+            )["evaluation_episodes"],
+            12,
+        )
+        with self.assertRaisesRegex(ValueError, "episodes must be positive"):
+            algorithm_settings(DEFAULT_CONFIG, evaluation_episodes=0)
+
+    def test_checkpoint_selection_prefers_success_then_reward(self) -> None:
+        reliable = checkpoint_selection_score(1.0, 100.0)
+        unreliable = checkpoint_selection_score(0.9, 1_000.0)
+        higher_reward = checkpoint_selection_score(1.0, 200.0)
+        self.assertGreater(reliable, unreliable)
+        self.assertGreater(higher_reward, reliable)
 
     def test_full_resume_settings_and_paired_artifacts(self) -> None:
         with TemporaryDirectory() as directory:
@@ -842,6 +861,15 @@ class FurutaContinuousTests(unittest.TestCase):
         self.assertEqual(result["lqr_fraction"], 0.0)
         self.assertTrue(all(row["mode"] == "swing_up" for row in result["trace"]))
 
+    def test_nominal_only_evaluation_mode(self) -> None:
+        self.assertEqual(
+            evaluation_modes("nominal"),
+            (("training_nominal", False, "training"),),
+        )
+        self.assertEqual(len(evaluation_modes("all")), 3)
+        with self.assertRaisesRegex(ValueError, "unknown evaluation mode"):
+            evaluation_modes("unsupported")
+
     def test_hybrid_lqr_bypasses_rl_current_filter(self) -> None:
         class ZeroPolicy:
             @staticmethod
@@ -919,6 +947,7 @@ class FurutaContinuousTests(unittest.TestCase):
         self.assertEqual(evaluate_main.__defaults__[5], DEFAULT_EPISODES)
         self.assertEqual(evaluate_main.__defaults__[6], DEFAULT_BASE_SEED)
         self.assertIsNone(evaluate_main.__defaults__[7])
+        self.assertEqual(evaluate_main.__defaults__[8], "all")
         self.assertEqual(
             MODEL_PATH.parent.name,
             "stage3c_half_rps_v0",

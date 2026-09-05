@@ -154,12 +154,11 @@ The default SAC setup remains intentionally small:
   resumable model/replay snapshot every 100,000 steps.
 
 Checkpoint selection first maximizes deterministic final-balance success. For
-equal success rates it deliberately prefers later termination, then mean reward.
-This encodes the preference for slower settling but does not claim that duration
-alone measures smoothness. Faster termination is reported but is not an
-objective. Final deployment selection must use the separate two-controller
-evaluation, including current smoothness and arm-angle/velocity trajectory
-shape.
+equal success rates it prefers mean reward, which combines the task errors,
+control effort, and action-change penalty defined above. Training validation
+uses 50 fixed nominal episodes by default; `--evaluation-episodes` changes that
+count. Final selection must still use unseen seeds in the standalone evaluator,
+which reports current smoothness and arm-angle/velocity trajectory shape.
 
 ## Evaluation
 
@@ -180,6 +179,10 @@ Evaluation runs 100 episodes in each genuinely distinct mode:
 - broad training reset with the nominal plant;
 - broad training reset with randomized parameters;
 - near-downward, zero-velocity hardware start with randomized parameters.
+
+Use `--mode nominal` to run only the first scenario, as in the compact
+nominal-only teaching workflow. The default `--mode all` preserves the complete
+three-scenario evaluation used by existing qualification protocols.
 
 The nominal mode uses arm angle in `[-pi/2, pi/2]`, arbitrary wrapped pendulum
 angle, and both velocities in `[-2, 2] rad/s`. In a curriculum run, the
@@ -276,6 +279,33 @@ state and `final/replay_buffer.pkl` contains its matching experience. The
 `best/best_model.zip` remains the success-first policy-selection checkpoint.
 `config.json` and `training.json` record the physical, reward, architecture,
 seed, initialization, and final timestep choices.
+
+For the compact nominal-only teaching workflow, train for two million decisions
+while retaining every 100,000-step checkpoint:
+
+```bash
+python src/train.py \
+  --timesteps 2000000 \
+  --current-filter-cutoff-hz 0 \
+  --evaluation-episodes 50 \
+  --seed 0 \
+  --run-dir src/runs/nominal_direct_seed0_2m
+```
+
+Then evaluate the validation-selected model once on 100 unseen nominal seeds:
+
+```bash
+python src/evaluate.py \
+  --model src/runs/nominal_direct_seed0_2m/best/best_model.zip \
+  --controller sac \
+  --mode nominal \
+  --episodes 100 \
+  --base-seed 20000 \
+  --results-dir src/runs/evaluation_nominal_direct_seed0_2m_best
+```
+
+Repeat the training run with independent seeds before drawing a final comparison.
+Do not use the unseen evaluation set to choose checkpoints.
 
 ### Stage 2: add only the hidden current response
 
@@ -486,6 +516,8 @@ it is not an independent end-to-end reproduction.
 Select the `rl-env` Conda interpreter once. Open **Run and Debug** and choose:
 
 - `Train stage 1: arm velocity 0.015 (default)`;
+- `Train nominal direct-current 2M (seed 0)` and its matching 100-episode
+  unseen nominal evaluation profile;
 - `Train stage 2: add 100 Hz filter`;
 - `Train stage 3b: refined curriculum seed 0` is retained as a historical
   experiment profile;

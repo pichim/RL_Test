@@ -10,6 +10,48 @@
             "console": "integratedTerminal"
         },
         {
+            "name": "Train nominal direct-current 2M (seed 0)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/train.py",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "args": [
+                "--timesteps",
+                "2000000",
+                "--current-filter-cutoff-hz",
+                "0",
+                "--evaluation-episodes",
+                "50",
+                "--seed",
+                "0",
+                "--run-dir",
+                "${workspaceFolder}/src/runs/nominal_direct_seed0_2m"
+            ]
+        },
+        {
+            "name": "Evaluate nominal direct-current best (100 unseen)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/evaluate.py",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "args": [
+                "--model",
+                "${workspaceFolder}/src/runs/nominal_direct_seed0_2m/best/best_model.zip",
+                "--controller",
+                "sac",
+                "--mode",
+                "nominal",
+                "--episodes",
+                "100",
+                "--base-seed",
+                "20000",
+                "--results-dir",
+                "${workspaceFolder}/src/runs/evaluation_nominal_direct_seed0_2m_best"
+            ]
+        },
+        {
             "name": "Train stage 2: add 100 Hz filter",
             "type": "debugpy",
             "request": "launch",

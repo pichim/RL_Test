@@ -35,6 +35,7 @@ SEED = 0
 ACTOR_NETWORK = [8, 8]
 CRITIC_NETWORK = [64, 64]
 DEFAULT_TOTAL_TIMESTEPS = 1_000_000
+DEFAULT_EVALUATION_EPISODES = 50
 DEFAULT_RESUME_SNAPSHOT_FREQUENCY = 100_000
 DEFAULT_CURRICULUM_RAMP_STEPS = 1_000_000
 DEFAULT_CURRICULUM_FINAL_LEARNING_RATE = 1e-4
@@ -495,8 +496,16 @@ class MilestoneStateCallback(BaseCallback):
                 print(f"saved retained resume milestone: {destination}")
 
 
+def checkpoint_selection_score(
+    success_rate: float,
+    mean_reward: float,
+) -> tuple[float, float]:
+    """Rank validation results by reliability, then the training objective."""
+    return float(success_rate), float(mean_reward)
+
+
 class SuccessFirstEvalCallback(EvalCallback):
-    """Save by success, then later termination, then mean reward."""
+    """Save by success rate, then mean reward."""
 
     def __init__(
         self,
@@ -510,7 +519,7 @@ class SuccessFirstEvalCallback(EvalCallback):
         super().__init__(*args, best_model_save_path=None, **kwargs)
         self.reset_seed = int(reset_seed)
         self.success_model_directory = Path(best_model_save_path)
-        self.best_success_score = (-1.0, -float("inf"), -float("inf"))
+        self.best_success_score = (-1.0, -float("inf"))
 
     def _on_step(self) -> bool:
         evaluating = self.eval_freq > 0 and self.n_calls % self.eval_freq == 0
@@ -521,15 +530,8 @@ class SuccessFirstEvalCallback(EvalCallback):
             success_rate = sum(self._is_success_buffer) / len(
                 self._is_success_buffer
             )
-            # Success is always the primary criterion. Among equally reliable
-            # policies, prefer later termination to reflect the deliberate
-            # preference for slower settling rather than racing to the terminal
-            # condition. Smoothness remains a standalone-evaluation metric.
-            episode_lengths = self.evaluations_length[-1]
-            mean_episode_length = sum(episode_lengths) / len(episode_lengths)
-            score = (
-                float(success_rate),
-                float(mean_episode_length),
+            score = checkpoint_selection_score(
+                success_rate,
                 self.last_mean_reward,
             )
             if score > self.best_success_score:
@@ -542,7 +544,6 @@ class SuccessFirstEvalCallback(EvalCallback):
                     print(
                         "New best success-first model: "
                         f"success={success_rate:.1%}, "
-                        f"mean_length={mean_episode_length:.1f}, "
                         f"mean_reward={self.last_mean_reward:.2f}"
                     )
         return continue_training
@@ -567,12 +568,15 @@ def algorithm_settings(
     curriculum_final_learning_rate_steps: int = (
         DEFAULT_CURRICULUM_FINAL_LEARNING_RATE_STEPS
     ),
+    evaluation_episodes: int = DEFAULT_EVALUATION_EPISODES,
 ) -> dict:
     """Return the small, physically timed SAC training configuration."""
     if total_timesteps <= 0:
         raise ValueError("total_timesteps must be positive")
     if total_timesteps % 2 != 0:
         raise ValueError("total_timesteps must be even for train_freq=2")
+    if evaluation_episodes <= 0:
+        raise ValueError("evaluation episodes must be positive")
     if resume_snapshot_frequency < 0:
         raise ValueError("resume_snapshot_frequency must be nonnegative")
     if resume_snapshot_frequency % 2 != 0:
@@ -630,11 +634,9 @@ def algorithm_settings(
         "resume_milestone_timesteps": sorted(resume_milestone_timesteps),
         # Ensure even a deliberately short smoke run produces a best model.
         "evaluation_frequency": min(100_000, total_timesteps),
-        "evaluation_episodes": 10,
+        "evaluation_episodes": int(evaluation_episodes),
         "evaluation_seed": EVALUATION_SEED,
-        "best_model_selection": (
-            "success_rate_then_longer_episode_then_mean_reward"
-        ),
+        "best_model_selection": "success_rate_then_mean_reward",
         "control_rate_hz": 1.0 / policy_period,
         "actor_network": list(actor_network),
         "critic_network": list(critic_network),
@@ -695,6 +697,7 @@ def train(
     curriculum_final_learning_rate_steps: int = (
         DEFAULT_CURRICULUM_FINAL_LEARNING_RATE_STEPS
     ),
+    evaluation_episodes: int = DEFAULT_EVALUATION_EPISODES,
 ) -> None:
     """Train or fully continue one isolated experiment."""
     continuation_count = sum(
@@ -745,6 +748,7 @@ def train(
         initial_actor_path=initial_actor_path,
         resume_model_path=(None if explicit_curriculum else resolved_resume_model),
         resume_replay_buffer_path=resolved_replay_buffer,
+        evaluation_episodes=evaluation_episodes,
         resume_snapshot_frequency=resume_snapshot_frequency,
         resume_milestone_timesteps=resume_milestone_timesteps,
         curriculum_model_path=(resolved_resume_model if explicit_curriculum else None),
@@ -1087,6 +1091,15 @@ def parse_arguments() -> argparse.Namespace:
         help=f"random seed (default: {SEED})",
     )
     parser.add_argument(
+        "--evaluation-episodes",
+        type=int,
+        default=DEFAULT_EVALUATION_EPISODES,
+        help=(
+            "fixed nominal validation episodes per checkpoint "
+            f"(default: {DEFAULT_EVALUATION_EPISODES})"
+        ),
+    )
+    parser.add_argument(
         "--actor-hidden-sizes",
         type=int,
         nargs="+",
@@ -1345,6 +1358,8 @@ def parse_arguments() -> argparse.Namespace:
         parser.error("--timesteps must be positive")
     if arguments.timesteps % 2 != 0:
         parser.error("--timesteps must be even because train_freq is 2")
+    if arguments.evaluation_episodes <= 0:
+        parser.error("--evaluation-episodes must be positive")
     if arguments.resume_snapshot_frequency < 0:
         parser.error("--resume-snapshot-frequency must be nonnegative")
     if arguments.resume_snapshot_frequency % 2 != 0:
@@ -1522,6 +1537,7 @@ def main() -> None:
         initial_actor_path=arguments.initial_actor,
         resume_model_path=arguments.resume_model,
         resume_replay_buffer_path=arguments.resume_replay_buffer,
+        evaluation_episodes=arguments.evaluation_episodes,
         resume_snapshot_frequency=arguments.resume_snapshot_frequency,
         resume_milestone_timesteps=arguments.resume_milestone_timesteps,
         curriculum_model_path=arguments.curriculum_model,

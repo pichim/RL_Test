@@ -1297,6 +1297,20 @@ def save_detailed_episode(
     )
 
 
+def evaluation_modes(mode: str) -> tuple[tuple[str, bool, str], ...]:
+    """Return the requested evaluation scenarios."""
+    all_modes = (
+        ("training_nominal", False, "training"),
+        ("training_randomized", True, "training"),
+        ("downward_rest_randomized", True, "downward_rest"),
+    )
+    if mode == "all":
+        return all_modes
+    if mode == "nominal":
+        return all_modes[:1]
+    raise ValueError(f"unknown evaluation mode: {mode}")
+
+
 def main(
     model_path: Path = MODEL_PATH,
     results_dir: Path = RESULTS_DIR,
@@ -1306,6 +1320,7 @@ def main(
     episodes: int = DEFAULT_EPISODES,
     base_seed: int = DEFAULT_BASE_SEED,
     randomized_arm_velocity_half_range_rps: float | None = None,
+    mode: str = "all",
 ) -> None:
     if controller not in {"sac", "hybrid", "both"}:
         raise ValueError(f"unknown controller: {controller}")
@@ -1313,6 +1328,7 @@ def main(
         raise ValueError("episodes must be positive")
     if base_seed < 0:
         raise ValueError("base seed must be nonnegative")
+    modes = evaluation_modes(mode)
     if not model_path.is_file():
         raise FileNotFoundError(f"No trained SAC model found: {model_path}")
     config, resolved_config_path = load_run_config(model_path, config_path)
@@ -1387,6 +1403,7 @@ def main(
         f"Evaluation controllers: {controller}",
         f"Episodes per mode: {episodes}",
         f"Base seed: {base_seed}",
+        f"Evaluation mode: {mode}",
         (
             "Randomized arm reset velocity: +/-"
             f"{config.randomized_reset_omega1_half_range / (2.0 * np.pi):g} "
@@ -1394,11 +1411,6 @@ def main(
         ),
     ]
     aggregate_rows = []
-    modes = (
-        ("training_nominal", False, "training"),
-        ("training_randomized", True, "training"),
-        ("downward_rest_randomized", True, "downward_rest"),
-    )
     controllers = ("sac", "hybrid") if controller == "both" else (controller,)
     for active_controller in controllers:
         for mode_index, (name, randomized, reset_mode) in enumerate(modes):
@@ -1457,6 +1469,7 @@ def main(
             {
                 "episodes_per_mode": episodes,
                 "base_seed": base_seed,
+                "mode": mode,
                 "seed_ranges": {
                     name: [
                         base_seed + mode_index * episodes,
@@ -1524,6 +1537,12 @@ def parse_arguments() -> argparse.Namespace:
         help="evaluate SAC alone, the SAC-to-LQR hybrid, or both (default)",
     )
     parser.add_argument(
+        "--mode",
+        choices=("all", "nominal"),
+        default="all",
+        help="evaluate all scenarios or only the nominal training reset",
+    )
+    parser.add_argument(
         "--episodes",
         type=int,
         default=DEFAULT_EPISODES,
@@ -1573,4 +1592,5 @@ if __name__ == "__main__":
         arguments.episodes,
         arguments.base_seed,
         arguments.randomized_arm_velocity_half_range_rps,
+        arguments.mode,
     )
