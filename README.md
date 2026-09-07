@@ -255,6 +255,42 @@ python -m pip install -r requirements.txt
 python src/test.py
 ```
 
+## One simple nominal SAC run
+
+For a single swing-up-and-balance experiment without a filter, action delay,
+plant randomization, curriculum, or LQR, run:
+
+```bash
+python src/nominal.py --execute
+```
+
+This trains SAC from scratch with seed 0, a `64 -> 64` actor and critics,
+`gamma = 0.99`, and two million decisions. The existing reward, five-second
+episode limit, and strict one-second balance criterion are unchanged. Initial
+states still vary over the existing broad reset distribution; the plant is
+fixed. This is more demanding than the linked MathWorks example's near-downward,
+zero-velocity reset, and its arm-position success criterion is stricter than
+the behavior illustrated there.
+
+Training validation uses 50 fixed nominal episodes. After training, the
+validation-selected policy is automatically evaluated with SAC alone on 100
+nominal episodes, seeds 80000-80099. No evaluation-based checkpoint selection
+is performed. The final report records success, safety, and capture counts;
+learning success is not guaranteed by completing the training budget.
+
+Outputs are under `src/runs/nominal_sac_actor64_seed0_v0/`:
+`training/` contains checkpoints, full resume states, and TensorBoard events;
+`evaluation/` contains summaries, PNG plots, and CSV traces; `status.json`
+records the active phase or failure; `FINDINGS.md` is written after evaluation.
+Existing output is never overwritten. Omit `--execute` for a dry run, or use
+`--job-dir` to choose a fresh output location.
+
+```bash
+tensorboard --logdir src/runs/nominal_sac_actor64_seed0_v0/training/tensorboard --port 6007
+```
+
+The matching VS Code profile is `Train and evaluate simple nominal SAC (64x64)`.
+
 ## Run the three-stage experiment
 
 ### Stage 1: isolate the arm-velocity weight on the nominal plant
@@ -344,6 +380,34 @@ TensorBoard records the curriculum scale and learning rate:
 ```bash
 tensorboard --logdir src/runs/reproduce_stage3c_half_rps_selected_v0_seed0_stage3c/tensorboard
 ```
+
+### Longer discount-horizon experiment
+
+The separate recipe `experiments/stage3c_half_rps_gamma09975_v0.json` runs the
+same three-stage chain from scratch with `--gamma 0.9975`. At 200 Hz, the
+approximate discount horizon `policy_period / (1 - gamma)` increases from
+0.5 seconds to 2 seconds. The five-second episode limit, reward weights,
+`+100` terminal bonus, and uncertainty curriculum remain unchanged. Keeping
+the bonus fixed isolates gamma; it is no longer the `1 / (1 - gamma)`
+continuation-value approximation for unit reward.
+
+Inspect the new seed-0 chain without starting training:
+
+```bash
+python src/reproduce.py --recipe experiments/stage3c_half_rps_gamma09975_v0.json --all --seed 0
+```
+
+Add `--execute` after reviewing and committing the changes to launch training.
+The recipe uses fresh `reproduce_stage3c_half_rps_gamma09975_v0_seed0_*`
+directories and retains the same 2.4M and 2.6M model/replay milestones. These
+are comparison checkpoints, not preselected winners for the new experiment.
+The frozen release and original recipes are unchanged.
+
+`--gamma` defaults to `0.99` for scratch or actor-transfer training. Full
+resume and curriculum continuation inherit the saved learner's gamma when
+omitted and reject an explicitly different value. The effective value is
+recorded in `training.json`. Compare with a fresh default-gamma run using the
+same current code and validation settings, not just the historical release.
 
 ### Selected Stage-3c 2.6M controller
 

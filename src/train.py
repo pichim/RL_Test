@@ -549,6 +549,24 @@ class SuccessFirstEvalCallback(EvalCallback):
         return continue_training
 
 
+def resolve_discount_factor(
+    requested: float | None,
+    saved: float | None = None,
+) -> float:
+    if requested is not None and (
+        not np.isfinite(requested) or not 0.0 < requested < 1.0
+    ):
+        raise ValueError("gamma must be finite and in (0, 1)")
+    if saved is not None:
+        if requested is not None and requested != saved:
+            raise ValueError(
+                f"Continuation requires the saved gamma={saved:g}; "
+                f"requested {requested:g}. Start a fresh learner to change gamma."
+            )
+        return float(saved)
+    return 0.99 if requested is None else float(requested)
+
+
 def algorithm_settings(
     config: FurutaConfig,
     total_timesteps: int = DEFAULT_TOTAL_TIMESTEPS,
@@ -569,6 +587,7 @@ def algorithm_settings(
         DEFAULT_CURRICULUM_FINAL_LEARNING_RATE_STEPS
     ),
     evaluation_episodes: int = DEFAULT_EVALUATION_EPISODES,
+    gamma: float | None = None,
 ) -> dict:
     """Return the small, physically timed SAC training configuration."""
     if total_timesteps <= 0:
@@ -622,7 +641,7 @@ def algorithm_settings(
         "buffer_size": 1_000_000,
         "batch_size": 256,
         "learning_rate": 3e-4,
-        "gamma": 0.99,
+        "gamma": resolve_discount_factor(gamma),
         "tau": 0.005,
         "train_frequency": 2,
         "gradient_steps": 1,
@@ -698,6 +717,7 @@ def train(
         DEFAULT_CURRICULUM_FINAL_LEARNING_RATE_STEPS
     ),
     evaluation_episodes: int = DEFAULT_EVALUATION_EPISODES,
+    gamma: float | None = None,
 ) -> None:
     """Train or fully continue one isolated experiment."""
     continuation_count = sum(
@@ -741,6 +761,7 @@ def train(
 
     settings = algorithm_settings(
         config=config,
+        gamma=gamma,
         total_timesteps=total_timesteps,
         seed=seed,
         actor_network=actor_network,
@@ -787,6 +808,12 @@ def train(
             tensorboard_log=str(run_dir / "tensorboard"),
             verbose=1,
         )
+        try:
+            settings["gamma"] = resolve_discount_factor(gamma, model.gamma)
+        except ValueError:
+            env.close()
+            evaluation_env.close()
+            raise
         model.load_replay_buffer(resolved_replay_buffer)
         source_training_path = find_run_file(
             resolved_resume_model,
@@ -803,7 +830,6 @@ def train(
             "buffer_size",
             "batch_size",
             "learning_rate",
-            "gamma",
             "tau",
             "train_frequency",
             "gradient_steps",
@@ -1091,6 +1117,16 @@ def parse_arguments() -> argparse.Namespace:
         help=f"random seed (default: {SEED})",
     )
     parser.add_argument(
+        "--gamma",
+        type=float,
+        default=None,
+        help=(
+            "discount factor in (0, 1); defaults to 0.99 for new learners "
+            "and the saved value for continuation; an explicit continuation "
+            "value must match the saved learner"
+        ),
+    )
+    parser.add_argument(
         "--evaluation-episodes",
         type=int,
         default=DEFAULT_EVALUATION_EPISODES,
@@ -1354,6 +1390,10 @@ def parse_arguments() -> argparse.Namespace:
         ),
     )
     arguments = parser.parse_args()
+    try:
+        resolve_discount_factor(arguments.gamma)
+    except ValueError as error:
+        parser.error(str(error))
     if arguments.timesteps <= 0:
         parser.error("--timesteps must be positive")
     if arguments.timesteps % 2 != 0:
@@ -1529,6 +1569,7 @@ def main() -> None:
     )
     train(
         config=config,
+        gamma=arguments.gamma,
         run_dir=arguments.run_dir,
         total_timesteps=arguments.timesteps,
         seed=arguments.seed,

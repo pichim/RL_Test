@@ -57,10 +57,13 @@ from train import (
     checkpoint_selection_score,
     curriculum_scale,
     find_run_file,
+    parse_arguments as parse_training_arguments,
     remove_directory_best_effort,
+    resolve_discount_factor,
     resolve_resume_model,
     resolve_resume_replay_buffer,
     save_committed_state,
+    train,
     validate_curriculum_config,
     validate_resume_config,
 )
@@ -147,6 +150,75 @@ class FurutaContinuousTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "episodes must be positive"):
             algorithm_settings(DEFAULT_CONFIG, evaluation_episodes=0)
+
+    def test_discount_factor_configuration_and_continuation(self) -> None:
+        self.assertEqual(resolve_discount_factor(None), 0.99)
+        self.assertEqual(resolve_discount_factor(None, 0.9975), 0.9975)
+        self.assertEqual(resolve_discount_factor(0.9975, 0.9975), 0.9975)
+        self.assertEqual(
+            algorithm_settings(DEFAULT_CONFIG, gamma=0.9975)["gamma"],
+            0.9975,
+        )
+        for value in (0.0, -0.1, 1.0, 1.1, float("nan"), float("inf")):
+            with self.subTest(gamma=value):
+                with self.assertRaisesRegex(ValueError, "gamma must be"):
+                    algorithm_settings(DEFAULT_CONFIG, gamma=value)
+        with self.assertRaisesRegex(ValueError, "saved gamma"):
+            resolve_discount_factor(0.9975, 0.99)
+        with patch("sys.argv", ["train.py", "--gamma", "0.9975"]):
+            self.assertEqual(parse_training_arguments().gamma, 0.9975)
+        with patch("sys.argv", ["train.py"]):
+            self.assertIsNone(parse_training_arguments().gamma)
+
+    def test_discount_factor_survives_training_chain(self) -> None:
+        def small_settings(*args, **kwargs):
+            settings = algorithm_settings(*args, **kwargs)
+            settings.update(
+                buffer_size=20,
+                batch_size=2,
+                learning_starts=0,
+                evaluation_episodes=1,
+            )
+            return settings
+
+        config = replace(DEFAULT_CONFIG, episode_time=0.01)
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch("train.algorithm_settings", side_effect=small_settings):
+                train(
+                    config, root / "scratch", 2,
+                    gamma=0.9975, resume_snapshot_frequency=0,
+                )
+                train(
+                    config, root / "resume", 2,
+                    resume_model_path=root / "scratch" / "final",
+                    resume_snapshot_frequency=0,
+                )
+                train(
+                    replace(config, training_parameter_randomization=True),
+                    root / "curriculum", 2,
+                    gamma=0.9975,
+                    curriculum_model_path=root / "resume" / "final",
+                    curriculum_ramp_steps=2,
+                    curriculum_final_learning_rate_steps=0,
+                    resume_snapshot_frequency=0,
+                )
+                with self.assertRaisesRegex(ValueError, "saved gamma"):
+                    train(
+                        config, root / "mismatch", 2,
+                        gamma=0.99,
+                        resume_model_path=root / "scratch" / "final",
+                        resume_snapshot_frequency=0,
+                    )
+            for index, name in enumerate(("scratch", "resume", "curriculum"), 1):
+                with self.subTest(stage=name):
+                    model = SAC.load(root / name / "final" / "model.zip")
+                    self.assertEqual(model.gamma, 0.9975)
+                    self.assertEqual(model.num_timesteps, 2 * index)
+                    settings = json.loads(
+                        (root / name / "training.json").read_text(encoding="utf-8")
+                    )
+                    self.assertEqual(settings["gamma"], 0.9975)
 
     def test_checkpoint_selection_prefers_success_then_reward(self) -> None:
         reliable = checkpoint_selection_score(1.0, 100.0)
@@ -981,6 +1053,24 @@ class FurutaContinuousTests(unittest.TestCase):
         )
         self.assertEqual(command[omega_index + 1], "0.5")
         self.assertIn("seed2", str(stage_run_dir(stage, 2)))
+
+    def test_long_horizon_recipe_changes_only_gamma_and_directories(self) -> None:
+        baseline = load_recipe(DEFAULT_RECIPE)
+        recipe = load_recipe(
+            DEFAULT_RECIPE.parent / "stage3c_half_rps_gamma09975_v0.json"
+        )
+        self.assertEqual(len(recipe["stages"]), len(baseline["stages"]))
+        for stage, original in zip(recipe["stages"], baseline["stages"], strict=True):
+            with self.subTest(stage=stage["id"]):
+                self.assertNotEqual(stage_run_dir(stage, 0), stage_run_dir(original, 0))
+                self.assertEqual(stage["args"][:2], ["--gamma", "0.9975"])
+                self.assertEqual(
+                    {**stage, "args": stage["args"][2:], "run_dir": original["run_dir"]},
+                    original,
+                )
+                command = build_stage_command(recipe, stage, seed=0)
+                with patch("sys.argv", command[1:]):
+                    self.assertEqual(parse_training_arguments().gamma, 0.9975)
 
     def test_selected_release_and_qualification_commands(self) -> None:
         manifest = verify_release()
