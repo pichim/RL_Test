@@ -88,6 +88,7 @@ class FurutaConfig:
     velocity_weight: float = 0.010
     arm_angle_weight: float = 1.5
     arm_velocity_weight: float = 0.015
+    current_weight: float = 1.0
     action_change_weight: float = 3.0
 
     def __post_init__(self) -> None:
@@ -124,8 +125,8 @@ class FurutaConfig:
             "balance_hold_time": self.balance_hold_time,
             "reward_scale": self.reward_scale,
             "velocity_weight": self.velocity_weight,
-            "arm_angle_weight": self.arm_angle_weight,
             "arm_velocity_weight": self.arm_velocity_weight,
+            "current_weight": self.current_weight,
         }
         for name, value in positive.items():
             if not np.isfinite(value) or value <= 0.0:
@@ -170,6 +171,7 @@ class FurutaConfig:
             "current_filter_cutoff_min_hz": self.current_filter_cutoff_min_hz,
             "current_filter_cutoff_max_hz": self.current_filter_cutoff_max_hz,
             "constraint_reward_weight": self.constraint_reward_weight,
+            "arm_angle_weight": self.arm_angle_weight,
             "action_change_weight": self.action_change_weight,
             "motor_torque_randomization": self.motor_torque_randomization,
             "arm_mass_randomization": self.arm_mass_randomization,
@@ -501,7 +503,7 @@ def matlab_reward(
         + pendulum_error**2
         + config.arm_velocity_weight * omega1**2
         + config.velocity_weight * omega2**2
-        + float(action) ** 2
+        + config.current_weight * float(action) ** 2
         + config.action_change_weight * action_change**2
     )
     return float(

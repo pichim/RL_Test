@@ -60,6 +60,28 @@ class NominalTests(unittest.TestCase):
                 evaluate.assert_not_called()
             self.assertEqual(json.loads((job / "status.json").read_text())["state"], "failed")
 
+    def test_smooth_current_changes_only_reward_weight(self):
+        with TemporaryDirectory() as directory:
+            job = Path(directory) / "job"
+            with patch("nominal.train", side_effect=RuntimeError("probe")) as training:
+                with self.assertRaisesRegex(RuntimeError, "probe"):
+                    run(job, execute=True, action_change_weight=5.0)
+            config = training.call_args.kwargs["config"]
+            self.assertEqual(config.action_change_weight, 5.0)
+            original = asdict(CONFIG)
+            original["action_change_weight"] = 5.0
+            self.assertEqual(asdict(config), original)
+            recorded = json.loads((job / "experiment.json").read_text())
+            self.assertEqual(recorded["config"]["action_change_weight"], 5.0)
+
+    def test_invalid_weight_creates_no_output(self):
+        with TemporaryDirectory() as directory:
+            job = Path(directory) / "job"
+            for weight in (-1.0, float("nan"), float("inf")):
+                with self.assertRaises(ValueError):
+                    run(job, execute=True, action_change_weight=weight)
+                self.assertFalse(job.exists())
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -6,6 +6,7 @@ dependencies:
   - pip
   - pip:
       - numpy>=2.1,<3
+      - scipy>=1.18,<2
       - gymnasium==1.3.0
       - stable-baselines3==2.9.0
       - tensorboard>=2.16

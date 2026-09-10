@@ -34,8 +34,15 @@ CONFIG = replace(
 )
 
 
-def run(job: Path = DEFAULT_JOB, execute: bool = False) -> None:
+def run(
+    job: Path = DEFAULT_JOB,
+    execute: bool = False,
+    action_change_weight: float = CONFIG.action_change_weight,
+    *,
+    task_config=None,
+) -> None:
     job = job.resolve()
+    config = replace(CONFIG if task_config is None else task_config, action_change_weight=action_change_weight)
     settings = {
         "seed": 0,
         "total_timesteps": 2_000_000,
@@ -44,7 +51,10 @@ def run(job: Path = DEFAULT_JOB, execute: bool = False) -> None:
         "critic_network": [64, 64],
         "evaluation_episodes": 50,
     }
-    print(f"Nominal SAC: {settings}\nOutput: {job}", flush=True)
+    print(
+        f"Nominal SAC: {settings}\nAction-change weight: {config.action_change_weight:g}\nOutput: {job}",
+        flush=True,
+    )
     if job.exists():
         raise FileExistsError(f"Choose a fresh job directory: {job}")
     if not execute:
@@ -69,11 +79,11 @@ def run(job: Path = DEFAULT_JOB, execute: bool = False) -> None:
             shutil.copy2(path, source / path.name)
         atomic_write_json(job / "experiment.json", {
             "training": settings,
-            "config": asdict(CONFIG),
+            "config": asdict(config),
             "evaluation": {"controller": "sac", "mode": "nominal", "episodes": 100, "base_seed": 80000},
             "selection": "Fixed nominal training validation; no selection on evaluation seeds.",
         })
-        train(config=CONFIG, run_dir=job / "training", **settings)
+        train(config=config, run_dir=job / "training", **settings)
         phase = "evaluation"
         status("running")
         evaluate(
@@ -88,13 +98,15 @@ def run(job: Path = DEFAULT_JOB, execute: bool = False) -> None:
             summary = next(csv.DictReader(handle))
         report = (
             "# Nominal SAC Result\n\n"
+            f"Action-change weight: {config.action_change_weight:g}.\n\n"
             f"Successes: {summary['success_count']}/{summary['episodes']}. "
             f"Unsafe episodes: {summary['unsafe_count']}. "
             f"Captures: {summary['capture_count']}.\n\n"
             "Fixed nominal plant, direct current, no delay, no LQR. "
             "The policy is selected using training validation, not evaluation seeds.\n\n"
             "Success requires the final second within 5 degrees of upright, "
-            "0.25 rad absolute arm position, 0.5 rad/s arm speed, and 1 rad/s pendulum speed. "
+            f"{config.balance_theta1:g} rad absolute arm position, "
+            f"{config.balance_omega1:g} rad/s arm speed, and {config.balance_omega2:g} rad/s pendulum speed. "
             "Initial states still vary across the existing broad reset distribution.\n\n"
             "See evaluation/summary.txt and evaluation/sac/training_nominal for metrics, PNGs, and traces. "
             "One seed and a five-second test do not establish long-duration or hardware reliability.\n"
@@ -111,5 +123,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--job-dir", type=Path, default=DEFAULT_JOB)
     parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--action-change-weight", type=float, default=CONFIG.action_change_weight)
     arguments = parser.parse_args()
-    run(arguments.job_dir, arguments.execute)
+    run(arguments.job_dir, arguments.execute, arguments.action_change_weight)

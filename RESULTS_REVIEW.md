@@ -1,5 +1,11 @@
 # Experiment review and staged plan
 
+This document records the earlier staged experiments and release evidence.
+For the current nominal actor64 reward experiments and the 2026-09-10 decision,
+start with [HANDOFF.md](HANDOFF.md). The stage releases below are distinct from
+the current1/delta3 nominal development reference; do not transfer qualification
+claims between them. Historical plans below are not instructions to launch work.
+
 The cleaned executable task and all three planned stages use schema `v0`
 (`matlab_hardware_sac_pure_v0`). Stage numbers describe the experimental
 sequence, while `v0` identifies the shared compatibility boundary. Future

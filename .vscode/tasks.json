@@ -1,0 +1,128 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Current1.5 delta4: overnight",
+			"dependsOrder": "sequence",
+			"dependsOn": ["Current1.5 delta4: preflight", "Current1.5 delta4: train", "Current1.5 delta4: evaluate"],
+			"runOptions": { "instanceLimit": 1 },
+			"problemMatcher": []
+		},
+		{
+			"label": "Current1.5 delta4: preflight",
+			"type": "process",
+			"command": "C:/Users/pmic/.conda/envs/rl-env/python.exe",
+			"args": ["src/current15_delta4.py"],
+			"options": { "cwd": "${workspaceFolder}" },
+			"problemMatcher": []
+		},
+		{
+			"label": "Current1.5 delta4: train",
+			"type": "process",
+			"command": "C:/Users/pmic/.conda/envs/rl-env/python.exe",
+			"args": ["-X", "faulthandler", "-u", "src/current15_delta4.py", "--execute"],
+			"options": { "cwd": "${workspaceFolder}" },
+			"presentation": { "reveal": "always", "panel": "dedicated" },
+			"runOptions": { "instanceLimit": 1 },
+			"problemMatcher": []
+		},
+		{
+			"label": "Current1.5 delta4: evaluate",
+			"type": "process",
+			"command": "${workspaceFolder}/src/runs/lqr_study_env/Scripts/python.exe",
+			"args": ["-X", "faulthandler", "-u",
+				"src/runs/nominal_sac_current15_delta4_seed0_v0/source/current15_delta4.py",
+				"--evaluate-only", "--execute", "--job-dir", "src/runs/nominal_sac_current15_delta4_seed0_v0"],
+			"options": { "cwd": "${workspaceFolder}" },
+			"presentation": { "reveal": "always", "panel": "dedicated" },
+			"runOptions": { "instanceLimit": 1 },
+			"problemMatcher": []
+		},
+		{
+			"label": "Local feedback: preflight",
+			"type": "process",
+			"command": "${workspaceFolder}/src/runs/lqr_study_env/Scripts/python.exe",
+			"args": ["-X", "faulthandler", "-u", "src/local_feedback_probe.py"],
+			"options": { "cwd": "${workspaceFolder}" },
+			"presentation": { "reveal": "always", "panel": "dedicated" },
+			"problemMatcher": []
+		},
+		{
+			"label": "Local feedback: run",
+			"type": "process",
+			"command": "${workspaceFolder}/src/runs/lqr_study_env/Scripts/python.exe",
+			"args": ["-X", "faulthandler", "-u", "src/local_feedback_probe.py", "--execute"],
+			"options": { "cwd": "${workspaceFolder}" },
+			"presentation": { "reveal": "always", "panel": "dedicated" },
+			"runOptions": { "instanceLimit": 1 },
+			"problemMatcher": []
+		},
+		{
+			"label": "Current1.5: run experiment",
+			"dependsOrder": "sequence",
+			"dependsOn": ["Current1.5: preflight", "Current1.5: train", "Current1.5: evaluate"],
+			"runOptions": { "instanceLimit": 1 },
+			"problemMatcher": []
+		},
+		{
+			"label": "Current1.5: preflight",
+			"type": "process",
+			"command": "C:/Users/pmic/.conda/envs/rl-env/python.exe",
+			"args": ["src/current_penalty.py", "--train-only"],
+			"options": { "cwd": "${workspaceFolder}" },
+			"problemMatcher": []
+		},
+		{
+			"label": "Current1.5: train",
+			"type": "process",
+			"command": "C:/Users/pmic/.conda/envs/rl-env/python.exe",
+			"args": [
+				"-X",
+				"faulthandler",
+				"-u",
+				"src/current_penalty.py",
+				"--train-only",
+				"--execute"
+			],
+			"options": { "cwd": "${workspaceFolder}" },
+			"presentation": { "reveal": "always", "panel": "dedicated" },
+			"runOptions": { "instanceLimit": 1 },
+			"problemMatcher": []
+		},
+		{
+			"label": "Current1.5: TensorBoard",
+			"type": "process",
+			"command": "C:/Users/pmic/.conda/envs/rl-env/python.exe",
+			"args": [
+				"-m",
+				"tensorboard.main",
+				"--logdir_spec",
+				"delta3_current1:src/runs/nominal_sac_actor64_seed0_v0/training/tensorboard,delta4_current1:src/runs/nominal_sac_actor64_delta4_seed0_v0/candidate/training/tensorboard,delta5_current1:src/runs/nominal_sac_actor64_delta5_seed0_v0/candidate/training/tensorboard,delta3_current1.5:src/runs/nominal_sac_current15_delta3_seed0_v0/candidate/training/tensorboard,delta4_current1.5:src/runs/nominal_sac_current15_delta4_seed0_v0/candidate/training/tensorboard",
+				"--host",
+				"127.0.0.1",
+				"--port",
+				"6013"
+			],
+			"options": { "cwd": "${workspaceFolder}" },
+			"presentation": { "reveal": "always", "panel": "dedicated" },
+			"runOptions": { "instanceLimit": 1 },
+			"isBackground": true,
+			"problemMatcher": []
+		},
+		{
+			"label": "Current1.5: evaluate",
+			"type": "process",
+			"command": "C:/Users/pmic/.conda/envs/rl-env/python.exe",
+			"args": [
+				"-X", "faulthandler", "-u",
+				"src/runs/nominal_sac_current15_delta3_seed0_v0/source/current_penalty.py",
+				"--evaluate-only", "--execute",
+				"--job-dir", "src/runs/nominal_sac_current15_delta3_seed0_v0"
+			],
+			"options": { "cwd": "${workspaceFolder}" },
+			"presentation": { "reveal": "always", "panel": "dedicated" },
+			"runOptions": { "instanceLimit": 1 },
+			"problemMatcher": []
+		}
+	]
+}

@@ -1,5 +1,14 @@
 # Furuta swing-up: direct-current SAC
 
+## Current Handoff (2026-09-10)
+
+Start with [HANDOFF.md](HANDOFF.md) for controller identities, completed results,
+the recommended current1/delta3 reference, stopped work and artifact requirements.
+The latest current1.5/delta4 run completed but failed sustained-balance evaluation
+(3/20 final balance and an unstable slow pole pair). Do not promote it.
+Slower settling alone is acceptable. These nominal actors are not hardware-qualified.
+The generated models/results under `src/runs/` are not included in a Git clone.
+
 This is a deliberately small teaching project. SAC learns the complete
 swing-up-and-balance task. The retained LQR is not used during training; it is
 only an evaluation and deployment comparison. The project follows the
@@ -64,6 +73,91 @@ delay sample is one 200 Hz policy period (`5 ms`), not one 1 kHz integration
 step. The delay and actuator state are deliberately absent from the SAC
 observation.
 
+## Current-penalty 1.5 experiment
+
+`src/current_penalty.py` trains a fresh seed-0 nominal SAC actor for 2M decisions,
+changing only `current_weight` from 1 to 1.5. The action-change weight stays 3;
+the centered success definition, safety limits, network and learner settings
+remain unchanged. Old configurations without `current_weight` default to 1.
+
+```powershell
+conda activate rl-env
+python src/current_penalty.py --train-only
+python -X faulthandler -u src/current_penalty.py --train-only --execute
+```
+
+Use **Terminal > Run Task** for `Current1.5: preflight`, `Current1.5: train`,
+`Current1.5: TensorBoard`, and `Current1.5: evaluate`. Select the `rl-env`
+interpreter first. Tasks never start automatically.
+See [the manual reproduction guide](TRAINING_WORKFLOW.md) for setup, separate
+commands, output locations, completion checks, and interruption handling.
+
+The dry run verifies the frozen weight-3 baseline and training runtime.
+Training refuses an existing job directory. It saves a protocol and source
+snapshot, trains, and stops at `training_completed.json`. Run evaluation
+separately to test the best training-validation checkpoint on the standard
+100 cases, then compare both models on 284 paired cases each.
+These include 100 fresh 30-second cases (480000-480099), 100 reused diagnostic
+cases, 81 boundary-neighborhood cases and three previous slow cases.
+
+The final stage uses the isolated numerical environment described below for
+local poles and +/-0.02 rad small-signal tests. `summary.json`, `review.json`
+and `FINDINGS.md` report reliability, paired current windows and local damping.
+No holdout-based checkpoint selection or automatic model promotion is performed.
+`completed.json` is written only after evaluation; exceptions write `failed.json`.
+Status-file locks fall back to uniquely named status events.
+The legacy `--execute` command without `--train-only` still runs the full pipeline.
+
+Default output: `src/runs/nominal_sac_current15_delta3_seed0_v0`.
+Training TensorBoard logs are under `candidate/training/tensorboard`.
+
+## Local actor-gain sensitivity
+
+[src/pole_sensitivity.py](src/pole_sensitivity.py) examines hypothetical local
+changes to the completed current1.5 actor's four physical-state derivatives
+and previous-action derivative. It verifies the saved model/source hashes,
+reproduces the original poles, tracks all five discrete modes, and screens
+fast-pair improvements against stability and slow-mode degradation. It writes
+only a new analysis directory; it does not train or modify a model.
+
+Results and interpretation:
+[src/runs/current15_pole_sensitivity_v1/FINDINGS.md](src/runs/current15_pole_sensitivity_v1/FINDINGS.md).
+These generated results require the completed experiment and are not part of
+a clean Git clone. To reproduce from the repository root, choose a new output:
+
+```powershell
+& 'src/runs/lqr_study_env/Scripts/python.exe' -m unittest discover -s src -p test_pole_sensitivity.py -v
+& 'src/runs/lqr_study_env/Scripts/python.exe' src/pole_sensitivity.py --output src/runs/current15_pole_sensitivity_v2
+```
+
+The scan holds the equilibrium fixed and changes local feedback derivatives,
+not reward weights. It does not predict what SAC will learn after retraining.
+
+## Local reward-weight study
+
+`src/lqr_weight_study.py` is a read-only, 200 Hz upright LQR surrogate for the
+SAC running cost. It includes previous normalized action, the action-change
+penalty, and the post-action state-cost timing. It sweeps one weight at a time
+at gamma 1.0 and 0.99, without training SAC or modifying controllers.
+
+The completed study and interpretation are in
+[`src/runs/lqr_weight_study_v1/FINDINGS.md`](src/runs/lqr_weight_study_v1/FINDINGS.md)
+(local generated artifacts, not tracked). Full poles, numerical checks,
+runtime versions, and source snapshots accompany the findings.
+
+SciPy native linear algebra crashed in the shared `rl-env` on this machine.
+The study was verified in `src/runs/lqr_study_env`, an isolated venv with local
+NumPy 2.2.6 and SciPy 1.15.3 that inherits other packages from `rl-env`.
+It does not change the training environment. To rerun locally in PowerShell:
+
+```powershell
+& 'src/runs/lqr_study_env/Scripts/python.exe' -m unittest discover -s src -p test_lqr_weight_study.py -v
+& 'src/runs/lqr_study_env/Scripts/python.exe' src/lqr_weight_study.py --output src/runs/lqr_weight_study_v2
+```
+
+The output directory must be new. Pole proximity in this unconstrained local
+model is not evidence of improved nonlinear SAC swing-up, safety, or smoothness.
+
 ## Observation and reward
 
 The seven-element observation is:
@@ -91,7 +185,7 @@ reward = F - 0.1 * (
     + upright_error^2
     + arm_velocity_weight*omega1^2
     + pendulum_velocity_weight*omega2^2
-    + action^2
+    + current_weight*action^2
     + action_change_weight*(action - previous_action)^2
 )
 ```
@@ -290,6 +384,105 @@ tensorboard --logdir src/runs/nominal_sac_actor64_seed0_v0/training/tensorboard 
 ```
 
 The matching VS Code profile is `Train and evaluate simple nominal SAC (64x64)`.
+
+### Current-jitter experiment
+
+After the successful nominal baseline exists locally, run the isolated
+action-change-weight comparison:
+
+```bash
+python src/smooth_current.py --execute
+```
+
+This starts a fresh seed-0, 2M-decision nominal run with only the action-change
+penalty increased from `3.0` to `5.0`. It does not resume the baseline learner
+with a changed reward. Filter, delay, and plant randomization stay off;
+networks, gamma, balance criteria, and all other reward weights stay unchanged.
+The runner checks the baseline configuration, learner settings, and core-code
+snapshot before starting. No existing results are overwritten or models promoted.
+
+Training, 100-episode nominal SAC evaluation, and a matched current comparison
+run sequentially without prompts. The comparison replays both validation-selected
+policies on seeds 80000-80099 and reports mean, p95, and maximum command-change
+RMS, total variation, and >=25 Hz power fraction. Windows cover the whole episode,
+the first second, and 0.2 seconds before/after first mechanical capture. Capture
+windows can differ between policies and exclude cases without capture; failures
+must be considered before interpreting smoother commands. These previously
+inspected seeds are a diagnostic comparison, not a new untouched holdout.
+
+Outputs are under `src/runs/nominal_sac_actor64_delta5_seed0_v0/`:
+`candidate/` holds training and evaluation, `comparison/` holds paired CSV metrics
+and PNG traces for seeds 80000 and 80015, and `reference/` preserves the baseline
+model and metadata. `status.json` tracks the overall phase, `candidate/status.json`
+distinguishes training from evaluation, and `FINDINGS.md` plus `comparison.json`
+are written after comparison. An execution failure stops the job and records
+the error; it does not silently retry or overwrite partial runs.
+
+Omit `--execute` for preflight only. For individual nominal experiments,
+`src/nominal.py` also accepts `--action-change-weight` and `--job-dir`.
+
+### Weight-4 follow-up
+
+With the nominal weight-3 and weight-5 runs available locally:
+
+```bash
+python src/weight4.py --execute
+```
+
+This trains weight 4 from scratch with the same seed-0, 2M-decision nominal
+settings. It automatically runs the usual 100-episode evaluation, then compares
+the three validation-selected policies on 100 old diagnostic seeds, a fixed
+81-state neighborhood around failure seed 180051, and 100 fresh seeds
+280000-280099 for 30 seconds each. Neighborhood offsets are +/-0.035 rad in
+each angle and +/-0.25 rad/s in each velocity; combinations outside reset
+support are omitted. No plant uncertainty, filtering, or delay is introduced.
+
+The fresh run is under `src/runs/nominal_sac_actor64_delta4_seed0_v0/`.
+`candidate/` contains training and nominal evaluation; `reference/` preserves
+the compared checkpoints; `source/` and `protocol.json` record the experiment.
+`comparison/` holds episode/current CSVs and representative or flagged traces
+and plots; `summary.json` and `FINDINGS.md` are written after all comparisons.
+Outer `status.json` tracks the full job, while `candidate/status.json` separates
+training from nominal evaluation. Failures stop the pipeline and record
+`ERROR.txt`; existing output is never overwritten. Omit `--execute` for preflight.
+
+Success at five seconds, final success, unsafe episodes, later balance loss,
+settling time, and paired current-window metrics are reported separately.
+Unsafe or truncated episodes are not silently treated as smoother successes.
+Evaluation seeds never select checkpoints, and no model is automatically promoted.
+
+### No-centering task
+
+```bash
+python src/no_centering.py --execute
+```
+
+This is a NEW task variant, not a relabeling of earlier results. The arm-angle
+reward weight becomes zero, and the balance arm-position tolerance becomes
+the existing travel limit (5*pi/8). Upright and velocity tolerances, the
+one-second hold, hard safety limits, current range, seven observations, weight-4
+action-change penalty, gamma, networks, and seed-0 2M-decision training remain
+unchanged. No extra boundary penalty is introduced. Stationary offsets near
+travel limits can pass; travel margins must be assessed before deployment.
+
+The three slow saved weight-4 cases were delayed by arm SPEED, not position.
+`python src/diagnose_centering.py` reproduces that diagnosis without altering
+saved results. Removing centering does not retrospectively make those cases pass.
+
+The runner trains from scratch and evaluates automatically. Compared models
+are the original centered weights 3 and 4 and the new no-centering weight 4.
+All are scored under both original and new success definitions, with paired
+current metrics and minimum travel margins. The comparison covers old100
+diagnostic seeds,81 neighborhood cases,100 fresh30-second seeds380000-380099,
+and the three slow30-second diagnostic cases. Training validation uses the
+new objective; none of these comparison cases select the checkpoint.
+
+Outputs are under `src/runs/nominal_sac_no_centering_delta4_seed0_v0/`:
+`candidate/`, `comparison/`, `reference/`, source/protocol snapshots,
+`summary.json`, and `FINDINGS.md`. Outer status updates fall back to unique
+`status_event_*.json` files if Windows locks `status.json`; `completed.json`
+is written only after the final report. `failed.json` records execution errors.
+Existing outputs and models are never overwritten. Omit `--execute` for preflight.
 
 ## Run the three-stage experiment
 
