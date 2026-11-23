@@ -1,0 +1,124 @@
+{
+  "checkpoints": [
+    {
+      "timesteps": 25000,
+      "episodes": 50,
+      "balanced": 0,
+      "captured": 1,
+      "genuine_swingup": 0,
+      "entered_teacher_box": 0,
+      "balanced_after_teacher_entry": 0,
+      "unsafe": 50,
+      "timeout": 0,
+      "mean_discounted_reward": -13.913422905573837
+    },
+    {
+      "timesteps": 50000,
+      "episodes": 50,
+      "balanced": 3,
+      "captured": 6,
+      "genuine_swingup": 3,
+      "entered_teacher_box": 3,
+      "balanced_after_teacher_entry": 3,
+      "unsafe": 0,
+      "timeout": 47,
+      "mean_discounted_reward": 33.13209421981814
+    },
+    {
+      "timesteps": 75000,
+      "episodes": 50,
+      "balanced": 7,
+      "captured": 11,
+      "genuine_swingup": 7,
+      "entered_teacher_box": 7,
+      "balanced_after_teacher_entry": 7,
+      "unsafe": 0,
+      "timeout": 43,
+      "mean_discounted_reward": 36.59600300128358
+    },
+    {
+      "timesteps": 100000,
+      "episodes": 50,
+      "balanced": 2,
+      "captured": 5,
+      "genuine_swingup": 2,
+      "entered_teacher_box": 2,
+      "balanced_after_teacher_entry": 2,
+      "unsafe": 0,
+      "timeout": 48,
+      "mean_discounted_reward": 31.819197282650965
+    },
+    {
+      "timesteps": 125000,
+      "episodes": 50,
+      "balanced": 1,
+      "captured": 29,
+      "genuine_swingup": 1,
+      "entered_teacher_box": 1,
+      "balanced_after_teacher_entry": 1,
+      "unsafe": 0,
+      "timeout": 49,
+      "mean_discounted_reward": 35.92416575627688
+    },
+    {
+      "timesteps": 150000,
+      "episodes": 50,
+      "balanced": 0,
+      "captured": 15,
+      "genuine_swingup": 0,
+      "entered_teacher_box": 4,
+      "balanced_after_teacher_entry": 0,
+      "unsafe": 0,
+      "timeout": 50,
+      "mean_discounted_reward": 38.721399119377985
+    },
+    {
+      "timesteps": 175000,
+      "episodes": 50,
+      "balanced": 2,
+      "captured": 49,
+      "genuine_swingup": 2,
+      "entered_teacher_box": 2,
+      "balanced_after_teacher_entry": 2,
+      "unsafe": 0,
+      "timeout": 48,
+      "mean_discounted_reward": 38.064812272179836
+    },
+    {
+      "timesteps": 200000,
+      "episodes": 50,
+      "balanced": 12,
+      "captured": 50,
+      "genuine_swingup": 12,
+      "entered_teacher_box": 41,
+      "balanced_after_teacher_entry": 12,
+      "unsafe": 0,
+      "timeout": 38,
+      "mean_discounted_reward": 38.16808436333829
+    },
+    {
+      "timesteps": 225000,
+      "episodes": 50,
+      "balanced": 50,
+      "captured": 50,
+      "genuine_swingup": 50,
+      "entered_teacher_box": 50,
+      "balanced_after_teacher_entry": 50,
+      "unsafe": 0,
+      "timeout": 0,
+      "mean_discounted_reward": 42.30576713731564
+    },
+    {
+      "timesteps": 250000,
+      "episodes": 50,
+      "balanced": 12,
+      "captured": 50,
+      "genuine_swingup": 12,
+      "entered_teacher_box": 12,
+      "balanced_after_teacher_entry": 12,
+      "unsafe": 0,
+      "timeout": 38,
+      "mean_discounted_reward": 41.285541400192045
+    }
+  ]
+}

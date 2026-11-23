@@ -1,23 +1,127 @@
 # Development Handoff
 
-Updated 2026-09-10 after the completed current1.5/delta4 experiment.
-This is the current decision record; older assessments and generated pass/fail
-labels retain their original criteria. No controller is automatically promoted.
+Updated 2026-11-23 after the two completed periodic 250k scratch runs.
 
-## Current Decision
+## Current decision
 
-Use the original **current1 / delta3** pure-SAC actor as the development reference.
-It has the strongest overall nominal evidence, not just the fastest settling.
-The goal is reliable swing-up, sustained balance, smooth current and good damping
-in a small teaching project. Slower settling is acceptable. Arm centering is not
-intrinsically required, but the recent reward comparisons kept the centered task.
-Do not change task criteria silently between comparisons.
+Use the [frozen local 225k actor](models/nominal_scratch_actor16_v1/README.md)
+as the periodic nominal reference. It passed every evaluation panel and
+settled faster with smaller current changes than the recovery-trained actor.
+Keep the recovery-trained 200k actor as a matched comparison. In this seed-0
+pair, recovery teaching reached 50/50 validation at 200k and retained it
+through 250k. The local run reached 50/50 at 225k and fell to 12/50 at 250k.
 
-The latest current1.5/delta4 run completed normally but is a behavioral regression:
-only 3/20 cases achieved final balance versus 20/20 for current1.5/delta3.
-Its centered equilibrium has an unstable slow pole pair. Do not use it as the
-new reference, and do not interpret its failure as merely slow settling.
-No further training or evaluation is authorized by this handoff.
+Keep periodic arm orientation, ±π angle starts, ±6 rad/s initial joint speeds,
+±1 A, 5 ms, the symmetric seven-input 16×16 actor, 64×64 critics, current
+weights of 0.30 / 1.50 in amperes, energy shaping, and validation every 25k.
+The scratch profiles use discount 0.99, the legacy reward with periodic arm
+error, and 500 local LQR warm-up updates. The two variants differ in the
+additional recovery demonstrations applied during SAC updates.
+
+The prior periodic time-cost pilot changed several settings at once. Its
+best actor reached capture in 100/100 episodes and sustained balance in
+70/100. Held-current LQR recovered all 30 of those failure states from the
+next control tick. The previous 200k actor recovered 28/30 and both selected
+scratch actors recovered 30/30. The saved 30-start panel is evaluation-only.
+The recovery teachers for the scratch run used separately sampled states.
+
+The [release](models/nominal_scratch_actor16_v1/README.md) records the model
+files, timing, benchmark data, and source hashes. The historical
+current1 / delta3 actor remains the reference for its bounded task. The
+historical current1.5 / delta4 run achieved 3/20 final balance and had an
+unstable slow pole pair.
+
+The next planned comparison is a matched simulation stress test of the
+frozen actors with current lag, command delay, and mechanical uncertainty.
+The scratch releases were evaluated on the direct-current nominal plant.
+
+## Linux CUDA Nominal Run (2026-11-22)
+
+Run directory: `src/runs/nominal_sac_actor64_linux_cuda_seed0_20261122_095132`.
+The Linux desktop completed the current1/delta3 nominal protocol with seed 0,
+2,000,000 decisions, 64×64 actor and critic networks, and gamma 0.99. Training
+used the RTX 3080 with PyTorch 2.14.0+cu132 in Miniforge `rl-env`, under the
+desktop's balanced power profile. The final evaluation ran on CPU.
+
+| Phase | Wall time |
+|---|---:|
+| CUDA training, including periodic validation and checkpoint saves | 2 h 04 min 33.4 s |
+| Final CPU evaluation and artifact export | 1 min 24.0 s |
+| Sum of the two timed phases | 2 h 05 min 57.4 s |
+
+Training averaged **267.6 decisions/s** over the full timed training phase.
+The matched monitor logs through the last completed training episode give
+**268.3 decisions/s on the Linux desktop with CUDA** and **181.8 decisions/s
+for the archived Windows CPU run**. The runs used different hardware and
+software environments. The full Linux CPU comparison is still pending.
+
+The **300,000-decision checkpoint** won selection with 50/50 on the fixed
+validation episodes and the highest mean validation reward among tied
+checkpoints. The evaluation artifact matches `training/best/best_model.zip`.
+The 100 five-second SAC-only evaluation episodes (seeds 80000–80099) yielded
+**98/100 final balance, 100/100 captures, and 0 unsafe episodes**. Seeds
+80034 and 80044 stayed within all balance limits for the final 0.826 s and
+0.711 s, respectively, short of the required 1 s. Both were within limits at
+the end. The original current1/delta3 reference scored **100/100** on the
+same evaluation seeds and remains the development reference.
+
+The run's `FINDINGS.md` and `status.json` record the timing, and
+`evaluation/summary.csv` plus `evaluation/sac/training_nominal/` hold the
+aggregate results and per-episode traces. The validation history is at
+`training/evaluation/evaluations.npz`. The best model is for evaluation.
+The final model and replay buffer under `training/final/` are available
+for continuation of this learner. These artifacts are local and Git-ignored.
+
+When work resumes, use the [Linux CPU comparison in README.md](README.md#linux-cuda-setup-and-nominal-benchmark)
+with the same evaluation and validation settings and balanced power profile.
+Compare training wall time and evaluation results before changing the learner
+or simulator.
+
+### 16×16 current-penalty comparison (2026-11-23)
+
+Two fresh 100k-decision CUDA runs used the same seed 0, seven-input actor,
+64×64 critics, ±1 A limit, 5 ms decision period, teaching, and energy shaping.
+Only the normalized current weights changed from 4/12 to 3/15, equivalent
+to physical coefficients 0.40/1.20 and 0.30/1.50.
+
+| Measure | Baseline | Proposed |
+|---|---:|---:|
+| Fixed validation passes | 49/50 | 50/50 |
+| Final nominal balance, zero unsafe in both | 98/100 | 100/100 |
+| Mean capture time on the 98 shared successes | 1.055 s | 0.692 s |
+| Mean time to finish the hold on shared successes | 3.066 s | 2.392 s |
+| Mean command-change RMS on shared successes | 0.02192 A | 0.01972 A |
+| Largest sampled pole modulus at centered upright | 1.01064 | 0.99670 |
+
+The proposed weights are the better candidate in this pilot. The comparison
+uses one seed and the 100k checkpoint, so repeat before drawing conclusions
+about the training method or changing the baseline. Logs, figures, the
+reproduction commands, and `comparison.json` are under
+`src/runs/compare_actor16_current_tradeoff_seed0_20261123_120136/`.
+
+### Historical guided pilots
+
+- The seed-0 500,000-decision ±1 A guided CUDA run completed. Its selected 64×64
+  actor passed 50/50 validation and 100/100 final nominal episodes, with zero
+  unsafe episodes. Training took 35 min 12.4 s and evaluation took 1 min 28.4 s.
+  The largest sampled local pole modulus was 0.97525. The exact source snapshot,
+  actor, SB3 checkpoint, configuration, evidence and hashes are in the
+  local archive `models/nominal_guided_1a_actor64_v0/`.
+- The guided 8×8 seven-input actor achieved 99/100 nominal balances at its
+  selected 100k checkpoint. The six-input 8×8 comparison achieved 8/100 on
+  the nominal panel. Both scored zero unsafe episodes. These narrower,
+  bounded runs remain small-actor comparisons.
+- The ±1 A centered LQR teacher recovered 273/273 tested starts within the
+  0.40 rad arm, 0.20 rad upright error, 1.0 rad/s arm and 2.0 rad/s pendulum
+  perturbation box in nominal simulation. The same 81-point grid gave 77/81
+  at ±0.5 A. At the next refined box (0.45 rad, 0.225 rad, 1.125 rad/s,
+  2.25 rad/s), ±1 A also recovered 273/273. At five times the original bounds
+  it recovered 79/81 and two starts crossed the arm limit. See
+  `src/runs/near_upright_current_limit_20261122_182243/` for the 5 ms
+  held-command study and raw results. The ±1 A pilot uses a smaller teacher
+  box (0.20 rad, 0.10 rad, 0.50 rad/s, 1.00 rad/s) and scales both normalized
+  current penalties by four to preserve their physical costs. The default
+  current limit remains ±0.5 A when the optional flag is omitted.
 
 ## Controller Map
 

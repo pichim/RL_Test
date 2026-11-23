@@ -31,6 +31,18 @@ class NominalTests(unittest.TestCase):
             with self.assertRaises(FileExistsError):
                 run(job, execute=True)
 
+    def test_required_cuda_fails_before_creating_output(self):
+        with TemporaryDirectory() as directory:
+            job = Path(directory) / "job"
+            with (
+                patch("nominal.torch.cuda.is_available", return_value=False),
+                patch("nominal.train") as training,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "CUDA is unavailable"):
+                    run(job, execute=True, require_cuda=True)
+            training.assert_not_called()
+            self.assertFalse(job.exists())
+
     def test_training_then_nominal_sac_evaluation(self):
         with TemporaryDirectory() as directory:
             job = Path(directory) / "job"
@@ -48,7 +60,10 @@ class NominalTests(unittest.TestCase):
             self.assertEqual(evaluate.call_args.kwargs["mode"], "nominal")
             self.assertEqual(evaluate.call_args.kwargs["controller"], "sac")
             self.assertEqual(evaluate.call_args.kwargs["base_seed"], 80000)
-            self.assertEqual(json.loads((job / "status.json").read_text())["state"], "completed")
+            status = json.loads((job / "status.json").read_text())
+            self.assertEqual(status["state"], "completed")
+            self.assertGreaterEqual(status["training_seconds"], 0)
+            self.assertGreaterEqual(status["evaluation_seconds"], 0)
             self.assertIn("100/100", (job / "FINDINGS.md").read_text())
 
     def test_training_failure_stops_evaluation(self):

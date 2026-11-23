@@ -1,51 +1,41 @@
 # Furuta swing-up: direct-current SAC
 
-## Current Handoff (2026-09-10)
+## Current stage (2026-11-23)
 
-Start with [HANDOFF.md](HANDOFF.md) for controller identities, completed results,
-the recommended current1/delta3 reference, stopped work and artifact requirements.
-The latest current1.5/delta4 run completed but failed sustained-balance evaluation
-(3/20 final balance and an unstable slow pole pair). Do not promote it.
-Slower settling alone is acceptable. These nominal actors are not hardware-qualified.
-The generated models/results under `src/runs/` are not included in a Git clone.
+The [16×16 local-teacher actor](models/nominal_scratch_actor16_v1/README.md)
+at 225,000 decisions is the reference for the periodic nominal task. Its
+recovery-teaching counterpart reached perfect validation earlier and stayed
+there for three consecutive checks in the seed-0 pilot. Both selected actors
+passed 100/100 nominal starts, 50/50 fresh starts, 81/81 upright starts, and
+30/30 fixed post-capture starts with zero unsafe episodes.
 
-This is a deliberately small teaching project. SAC learns the complete
-swing-up-and-balance task. The retained LQR is not used during training; it is
-only an evaluation and deployment comparison. The project follows the
-observation and action-change
-structure of the MathWorks
-[Quanser QUBE example](https://www.mathworks.com/help/reinforcement-learning/ug/train-agent-offline-to-control-quanser-qube-pendulum.html),
-with these intentional differences:
+See [HANDOFF.md](HANDOFF.md) for the current decisions and
+[the scratch run commands](#matched-250k-scratch-runs-with-lqr-recovery) for
+reproduction. The release directory contains both selected actors, the common
+task configuration, and compact evidence. Full run outputs in `src/runs/`
+are local artifacts. The reference is for nominal simulation.
 
-- the existing nonlinear Furuta model and its measured parameters;
-- SAC instead of TD3;
-- motor current in `[-0.5, +0.5] A` instead of motor voltage;
-- optional comparison against a deterministic LQR after SAC swing-up.
-
-The first and most recent successful experiments remain fixed comparison
-references in the experiment review. The executable code now supports only
-the current pure-RL task schema; historical compatibility branches have
-deliberately been removed.
+The project trains SAC to swing up and balance a nonlinear Furuta pendulum at
+200 Hz. Guided profiles use LQR to teach the actor during training and export
+a single neural actor. The older bounded profiles and optional hybrid
+evaluation are still available. The observation and current-change reward
+follow the structure of the [MathWorks Quanser QUBE example](https://www.mathworks.com/help/reinforcement-learning/ug/train-agent-offline-to-control-quanser-qube-pendulum.html);
+this project uses its own Furuta plant model and commands motor current.
 
 ## Versioning
 
-The cleaned, executable experiment schema starts at `v0`. The version is
-stored in every run's `config.json` as
-`task_version = "matlab_hardware_sac_pure_v0"` and is repeated at the end of
-the canonical run-directory names. Stages 1, 2, and 3 are controlled
-experiments within the same `v0` schema; the stage number is not a schema
-version.
+Every saved `config.json` identifies the task it uses.
 
-Increment the suffix to `v1`, `v2`, and so on only for a breaking structural
-change—for example, changing the observation or action shape, reward formula,
-termination logic, plant equations, or the meaning of saved randomization
-fields. Additive uncertainty fields with nominal defaults remain compatible
-with the selected `v0` source. Numeric
-hyperparameters such as reward weights, seeds, training duration, and stage
-options are recorded in `config.json` and the run-directory name; they do not
-by themselves advance the schema version. Historical result names that already
-contain another suffix are fixed artifact labels and are not part of this new
-numbering sequence.
+| Task version | Behavior |
+|---|---|
+| `matlab_hardware_sac_pure_v0` | Bounded arm travel and the original reward in the legacy profiles |
+| `periodic_arm_sac_v1` | Periodic arm and experimental time-cost reward |
+| `periodic_arm_legacy_reward_v1` | Periodic arm and the original reward structure with wrapped arm error |
+
+The two periodic tasks allow arm crossings at ±π and score arm orientation
+modulo a turn. Evaluation reads the saved task. Training seed, network size,
+and budget are recorded separately. Scripts that require byte-for-byte source
+matches to an older run need that run's source snapshot.
 
 ## Controller structure
 
@@ -330,7 +320,7 @@ models/stage3b_v0/   superseded historical controller and failed holdouts
 
 ## Install and test
 
-Use Python 3.10 or newer.
+Use Python 3.12, as specified in `environment.yml`.
 
 If the project Conda environment already exists, activate it and run the tests:
 
@@ -348,6 +338,285 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 python src/test.py
 ```
+
+## Linux CUDA setup and nominal benchmark
+
+For the RTX 3080 desktop with Miniforge and an NVIDIA driver compatible with CUDA
+13.2, create the Python and pip environment, install the CUDA build of PyTorch, then
+install the project requirements. Run the creation and installation commands only
+when setting up a new environment. The desktop setup uses the PyTorch 2.14.0
+CUDA 13.2 wheel. The generic `environment.yml` leaves PyTorch to dependency
+resolution.
+
+```bash
+source "$HOME/miniforge3/etc/profile.d/conda.sh"
+conda create -n rl-env python=3.12 pip
+conda activate rl-env
+python -m pip install 'torch==2.14.0+cu132' --index-url https://download.pytorch.org/whl/cu132
+python -m pip install -r requirements.txt
+python -m pip check
+```
+
+On the desktop, activate the existing environment from a VS Code Remote SSH
+terminal at the repository root. Use `tmux new -s furuta-gpu` first if the run
+should survive an SSH disconnect. The commands below use a new output directory
+and the non-interactive plotting backend for SSH.
+
+```bash
+source "$HOME/miniforge3/etc/profile.d/conda.sh"
+conda activate rl-env
+export MPLBACKEND=Agg OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
+run_dir="src/runs/nominal_sac_actor64_linux_cuda_seed0_$(date +%Y%m%d_%H%M%S)"
+python -u src/nominal.py --require-cuda --job-dir "$run_dir"
+```
+
+Check that preflight reports the RTX 3080, then start training and automatic
+evaluation in the same terminal.
+
+```bash
+python -u src/nominal.py --require-cuda --job-dir "$run_dir" --execute
+```
+
+The trainer should print `Using cuda device`. The preflight performs a real CUDA
+matrix multiplication and stops before creating a run directory if CUDA is
+unavailable. The nominal simulation and final evaluation still use the CPU.
+Training and final evaluation wall times are written separately to
+`status.json` and `FINDINGS.md`. Training time includes periodic checkpoint
+validation and saving. TensorBoard events are under
+`training/tensorboard/`, and the selected model is
+`training/best/best_model.zip`. Detach from tmux with **Ctrl+B**, then **D**.
+Reconnect with `tmux attach -t furuta-gpu`.
+
+For a CPU comparison on the same desktop, run this separately after the CUDA job
+finishes. Both commands use the same nominal training and evaluation settings
+and one CPU math thread.
+
+```bash
+cpu_dir="src/runs/nominal_sac_actor64_linux_cpu_seed0_$(date +%Y%m%d_%H%M%S)"
+CUDA_VISIBLE_DEVICES= python -u src/nominal.py --job-dir "$cpu_dir" --execute
+```
+
+### Guided nominal SAC on CUDA
+
+Use `--guided` for energy shaping, reflection symmetry, and LQR teaching on
+CUDA. The 500,000-decision pilot below enables ±1 A. The 5 ms control period,
+1 ms physics step, and centered balance targets are the same as the reference.
+The command without `--max-current` retains the original ±0.5 A limit.
+
+From the repository root in a VS Code Remote SSH shell, start a dedicated
+terminal session with `tmux new -s furuta-guided-1a`. In that session run:
+
+```bash
+source "$HOME/miniforge3/etc/profile.d/conda.sh"
+conda activate rl-env
+export MPLBACKEND=Agg OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
+run_dir="src/runs/nominal_sac_guided_cuda_1a_seed0_$(date +%Y%m%d_%H%M%S)"
+python -u src/nominal.py --guided --max-current 1 --timesteps 500000 --job-dir "$run_dir"
+```
+
+After preflight reports the RTX 3080 and ±1 A, launch from the same terminal:
+
+```bash
+python -u src/nominal.py --guided --max-current 1 --timesteps 500000 --job-dir "$run_dir" --execute
+```
+
+The pilot validates every 100,000 decisions and evaluates the best checkpoint
+on the standard 100 nominal resets. Detach with **Ctrl+B**, then **D**, and
+reconnect with `tmux attach -t furuta-guided-1a`.
+
+The 1 A option scales the normalized current and current-change weights
+from 1 and 3 to 4 and 12, preserving their cost for the same physical
+current and current change. The 1 A teacher samples starts within
+±0.20 rad arm angle, ±0.10 rad upright error, ±0.50 rad/s arm speed and
+±1.00 rad/s pendulum speed. This is inside the tested recovery envelope.
+The centered LQR labels short nonlinear recovery trajectories using 5 ms
+held commands. The actor gets 500 supervised updates before SAC rollout
+collection, then a supervised command and near-origin slope loss alongside
+each SAC actor update. The actor's mean is antisymmetric under reflection, its
+exploration scale is invariant, and the critics are invariant under simultaneous
+observation and action reflection. Training adds a bounded discounted
+pendulum-energy potential difference with a default weight of 0.25.
+`--energy-weight 0` disables shaping while retaining the same reflection and
+LQR teaching for the control comparison. Use fresh output directories and matched
+`--seed` values for comparisons.
+
+Checkpoint selection and the final nominal evaluation use the original
+unshaped task. `training/actor.pt2` is the standalone deterministic neural
+controller. It takes an N×7 float32 batch in the existing SAC observation
+order and returns normalized commands, which are multiplied by the current
+limit. Load it with `torch.export.load(path).module()`.
+`training/local_diagnostics.json` gives the actor and teacher gains
+and the actor's finite-difference 5 ms closed-loop poles near upright.
+The LQR teacher operates during training. An exactly symmetric deterministic
+actor outputs zero at a perfectly centered, motionless hanging-down start.
+A separate startup decision would be needed if exact-rest startup is required.
+
+### Matched 8×8 actor pilot
+
+The local archive `models/nominal_guided_1a_actor64_v0/` contains the
+64×64 checkpoint, standalone actor, source, and results. To test
+a smaller actor, use the same CUDA session setup above and a fresh output path.
+
+```bash
+run_dir="src/runs/nominal_sac_guided_cuda_1a_actor8_seed0_$(date +%Y%m%d_%H%M%S)"
+python -u src/nominal.py --guided --max-current 1 --timesteps 500000 \
+  --actor-hidden-sizes 8 8 --job-dir "$run_dir"
+python -u src/nominal.py --guided --max-current 1 --timesteps 500000 \
+  --actor-hidden-sizes 8 8 --job-dir "$run_dir" --execute
+```
+
+Preflight should display `actor_network: [8, 8]` and `critic_network: [64, 64]`.
+This is a fresh seed-0 run with the same energy shaping, symmetry, LQR teaching,
+current limit, evaluation and decision budget as the 64×64 pilot. The exported
+deterministic 7 → 8 → 8 → 1 network has 145 parameters.
+
+### Six-input 8×8 actor comparison
+
+Use the guided CUDA setup above. The comparison uses the first 100,000
+decisions, matching the selected checkpoint of the seven-input 8×8 actor.
+
+```bash
+run_dir="src/runs/nominal_sac_guided_cuda_1a_actor8_no_history_seed0_$(date +%Y%m%d_%H%M%S)"
+python -u src/nominal.py --guided --max-current 1 --timesteps 100000 \
+  --actor-hidden-sizes 8 8 --actor-no-previous-command --job-dir "$run_dir" --execute
+```
+
+The standalone actor takes the first six observation features. The training
+critics still see the full seven-feature observation and the candidate action,
+with two 64-unit hidden layers each. The environment keeps the previous command
+for its current-change penalty. Reflection symmetry and LQR teaching apply
+as before. The exported model has 137 parameters and takes an N×6 float32 tensor.
+
+### 16×16 LQR-region pilot with full arm travel
+
+With the guided CUDA environment active, prepare a fresh seed-0 run for 500,000
+control decisions. Run the first Python command for preflight and the second
+when ready to start.
+
+```bash
+run_dir="src/runs/nominal_sac_guided_cuda_1a_actor16_lqr_region_seed0_$(date +%Y%m%d_%H%M%S)"
+args=(--guided --max-current 1 --timesteps 500000 --actor-hidden-sizes 16 16
+      --current-weight 0.75 --action-change-weight 3.75
+      --reset-speed-rad-s 6 --full-arm-travel --lqr-only-inside --job-dir "$run_dir")
+python -u src/nominal.py "${args[@]}"
+python -u src/nominal.py "${args[@]}" --execute
+```
+
+Preflight should show the CUDA device, 16×16 actor, 64×64 critics, ±1 A,
+and a 5 ms control period. The two CLI weights use the 0.5 A reference
+convention. At 1 A the run stores 3 and 15, which the reward scale of 0.10
+turns into the physical costs `0.30 * I² + 1.50 * (I - I_previous)²`
+with commanded current in amperes. The actor keeps all seven inputs and
+pendulum-energy shaping retains its weight of 0.25.
+
+The simulator samples both angles over ±π and both initial angular velocities
+over ±6 rad/s. Arm excursions beyond ±π end the episode as unsafe. A reset
+near that limit with outward velocity can end before the controller has time
+to brake. Training validation and the 100-episode final evaluation use this
+wider reset distribution, so scores from the older distribution describe a
+different test.
+
+Inside the LQR box, the actor receives direct updates only from LQR examples.
+The box is ±0.20 rad arm angle, ±0.10 rad upright error, ±0.50 rad/s arm speed,
+and ±1.00 rad/s pendulum speed. The teacher supplies commands and near-origin
+slope targets during every actor update. Outside the box, SAC also updates
+the actor using replay. The critics train on the full replay buffer. After
+the standard random replay warm-up, rollout actions come from the actor with
+reduced exploration inside the box.
+
+The deployed artifact is the single symmetric neural actor in
+`training/actor.pt2`. Inspect `training/local_diagnostics.json` for the
+local gains and closed-loop poles of the validation-selected actor and
+`evaluation/summary.txt` for its swing-up and balance results.
+
+### Periodic-arm 16×16 pilot
+
+The 500,000-decision pilot uses the same 5 ms control period, ±1 A current
+limit, seven-input symmetric 16×16 actor, 64×64 critics and current weights
+of 0.30 and 1.50 in amperes. Both angles start within ±π and both velocities
+within ±6 rad/s. Arm orientation is periodic. A full turn counts as zero
+orientation, and crossing ±π can continue through the simulation. Traces
+retain unwrapped arm angle. The velocity and numerical guards still apply.
+
+A smooth periodic arm cost, a 0.01 time cost per decision, a 250 balance
+bonus, and a 250 unsafe penalty replace the old arm-position and survival
+terms. Pendulum energy shaping stays at 0.25. Discount is 0.999 per control
+decision. This reward favored successful balance over timeout on all 34
+paired trajectories audited from the earlier 200k and 500k checkpoints.
+
+Every 25,000 decisions, the run evaluates the same 50 validation starts and
+saves a checkpoint. It selects by balance success first. The LQR target
+holds across five previous-current values at sampled faces, edges, and
+corners of the upright box. The actor gets 4,000 teacher-only updates before
+rollout collection. The slope anchors and trajectory examples are also used.
+
+From the repository root with `rl-env` active, preflight the run and then
+add `--execute` in the same shell when ready.
+
+```bash
+export MPLBACKEND=Agg OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
+run_dir="src/runs/nominal_sac_guided_cuda_periodic_actor16_seed0_$(date +%Y%m%d_%H%M%S)"
+baseline="src/runs/nominal_sac_guided_cuda_1a_actor16_lqr_region_seed0_20261123_131002/training/best/best_model.zip"
+python -u src/nominal.py --periodic-pilot --comparison-model "$baseline" --job-dir "$run_dir"
+python -u src/nominal.py --periodic-pilot --comparison-model "$baseline" --job-dir "$run_dir" --execute
+```
+
+`training/validation_metrics.json` records balance, capture, teaching-box
+entry, unsafe terminations, timeouts, and discounted return at each check.
+The selected model and the previous actor are evaluated using the same
+100 final seeds in `evaluation/` and `baseline_evaluation/`. This panel
+includes all 15 starts that crossed the old arm limit. The
+`upright_benchmark.json` report compares LQR command error and recovery on
+81 local starts, and `training/actor.pt2` contains the selected standalone
+actor. The previous actor scored 100/100 on the periodic final panel and
+81/81 on the local recovery panel, with a mean LQR command error of 0.033 A.
+The `--comparison-model` argument can be omitted if the earlier checkpoint is
+unavailable.
+
+Legacy configs retain the bounded task rules. Workflows that require
+byte-for-byte core source matches to historical runs need the corresponding
+historical source snapshot.
+
+### Matched 250k scratch runs with LQR recovery
+
+Both variants start from random weights and empty replay. They use the
+periodic simulator, ±π angle and ±6 rad/s speed resets, ±1 A, 5 ms, a symmetric
+seven-input 16×16 actor, 64×64 critics, and the 0.30 / 1.50 physical current
+weights. They use the previous reward with wrapped arm error and discount
+0.99, plus energy shaping with weight 0.25. Pretraining uses 500 updates from
+the local teacher, including the near-origin slope anchors.
+
+The `local` control uses the existing LQR teaching box. The `recovery` variant
+adds held-current LQR approaches during SAC updates. It samples new starts
+near mechanical capture with a reproducible separate RNG, keeps the
+trajectories that reach the small teaching box and sustain balance, and
+adds the approach up to the first entry. Both profiles use the same
+local data and pretraining. They require no earlier model.
+
+Activate `rl-env` and run from the repository root. The two jobs are
+sequential on the same GPU and use seed 0 unless you supply `--seed`.
+
+```bash
+export MPLBACKEND=Agg OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
+capture_panel="models/nominal_scratch_actor16_v1/capture_starts.csv"
+stamp=$(date +%Y%m%d_%H%M%S)
+for variant in local recovery; do
+  python -u src/nominal.py --scratch-pilot "$variant" --capture-benchmark "$capture_panel" \
+    --job-dir "src/runs/nominal_sac_scratch_${variant}_seed0_$stamp" || break
+done
+```
+
+Once both preflights pass, use the same loop with `--execute` appended to the
+Python command. The fixed 30-state capture panel is optional and used only
+after training. Each run also scores 100 final periodic starts and an
+81-state upright recovery panel. Checkpoints are ranked every 25,000
+decisions on fixed validation starts by sustained balance, then balance
+after entering the teaching box, then mean return.
+
+Read `training/validation_metrics.json`, `evaluation/summary.txt`,
+`upright_benchmark.json`, and `capture_benchmark.json` in each job directory.
+`training/training.json` records the recovery sampling and dataset counts.
+Each best checkpoint exports a single neural controller as `training/actor.pt2`.
 
 ## One simple nominal SAC run
 

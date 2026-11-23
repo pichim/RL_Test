@@ -16,8 +16,9 @@ from stable_baselines3 import SAC
 from controllers import HybridSupervisor, LQRController, Mode
 from furuta_env import (
     DEFAULT_CONFIG,
-    TASK_VERSION,
+    SUPPORTED_TASK_VERSIONS,
     FurutaConfig,
+    arm_position_error,
     balanced_state_ready,
     capture_ready,
     current_filter_cutoff_range_hz,
@@ -219,10 +220,10 @@ def load_run_config(
             "No training config found beside the model. Pass --config explicitly."
         )
     data = json.loads(found.read_text(encoding="utf-8"))
-    if data.get("task_version") != TASK_VERSION:
+    if data.get("task_version") not in SUPPORTED_TASK_VERSIONS:
         raise ValueError(
             "The model configuration does not use the current task version: "
-            f"expected {TASK_VERSION!r}, got {data.get('task_version')!r}."
+            f"got {data.get('task_version')!r}."
         )
     try:
         config = FurutaConfig(**data)
@@ -378,7 +379,7 @@ def trace_row(
         "time_s": float(time_s),
         "theta1_rad": float(state[0]),
         "theta1_reference_rad": float(theta1_reference),
-        "theta1_relative_rad": float(state[0] - theta1_reference),
+        "theta1_relative_rad": arm_position_error(state[0], theta1_reference, config),
         "theta2_rad": float(state[1]),
         "upright_error_rad": float(upright_error(state)),
         "omega1_rad_s": float(state[2]),
@@ -1379,6 +1380,7 @@ def main(
     text_output = [
         f"Model: {model_path}",
         f"Configuration: {resolved_config_path}",
+        *(["Arm position: periodic orientation"] if config.periodic_arm else []),
         f"SAC rate: {control_rate:g} Hz",
         (
             "SAC current path: continuous first-order response centered at "

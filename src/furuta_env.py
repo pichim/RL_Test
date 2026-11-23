@@ -25,6 +25,11 @@ from furuta_model import FurutaPendulum
 
 
 TASK_VERSION = "matlab_hardware_sac_pure_v0"
+PERIODIC_TASK_VERSION = "periodic_arm_sac_v1"
+PERIODIC_LEGACY_REWARD_TASK_VERSION = "periodic_arm_legacy_reward_v1"
+SUPPORTED_TASK_VERSIONS = (TASK_VERSION, PERIODIC_TASK_VERSION, PERIODIC_LEGACY_REWARD_TASK_VERSION)
+PERIODIC_STEP_COST = 0.01
+PERIODIC_UNSAFE_PENALTY = 250.0
 
 
 @dataclass(frozen=True)
@@ -91,8 +96,16 @@ class FurutaConfig:
     current_weight: float = 1.0
     action_change_weight: float = 3.0
 
+    @property
+    def periodic_arm(self) -> bool:
+        return self.task_version in (PERIODIC_TASK_VERSION, PERIODIC_LEGACY_REWARD_TASK_VERSION)
+
+    @property
+    def periodic_time_cost(self) -> bool:
+        return self.task_version == PERIODIC_TASK_VERSION
+
     def __post_init__(self) -> None:
-        if self.task_version != TASK_VERSION:
+        if self.task_version not in SUPPORTED_TASK_VERSIONS:
             raise ValueError(f"unsupported task_version: {self.task_version}")
         positive = {
             "sample_time": self.sample_time,
@@ -140,7 +153,7 @@ class FurutaConfig:
             raise ValueError(
                 "action_dead_time_max_samples must be a nonnegative integer"
             )
-        if self.reset_theta1_half_range > self.arm_angle_limit:
+        if not self.periodic_arm and self.reset_theta1_half_range > self.arm_angle_limit:
             raise ValueError("the arm reset range must lie inside the arm limit")
         for randomized_name, nominal_name, safety_name in (
             (
@@ -246,6 +259,11 @@ def wrap_angle(angle: float) -> float:
     return float((angle + np.pi) % (2.0 * np.pi) - np.pi)
 
 
+def arm_position_error(theta1: float, reference: float, config: FurutaConfig) -> float:
+    error = float(theta1 - reference)
+    return wrap_angle(error) if config.periodic_arm else error
+
+
 def upright_error(state: np.ndarray) -> float:
     """Return pendulum error from upright in the MATLAB angle convention."""
     return wrap_angle(float(state[1]) - np.pi)
@@ -291,7 +309,7 @@ def balanced_state_ready(
     return bool(
         np.all(np.isfinite(state))
         and abs(upright_error(state)) <= config.balance_angle
-        and abs(theta1 - theta1_reference) <= config.balance_theta1
+        and abs(arm_position_error(theta1, theta1_reference, config)) <= config.balance_theta1
         and abs(omega1) <= config.balance_omega1
         and abs(omega2) <= config.balance_omega2
     )
@@ -332,7 +350,7 @@ def within_matlab_constraints(state: np.ndarray, config: FurutaConfig) -> bool:
     theta1, _, omega1, omega2 = np.asarray(state, dtype=np.float64)
     return bool(
         np.all(np.isfinite(state))
-        and abs(theta1) <= config.arm_angle_limit
+        and (config.periodic_arm or abs(theta1) <= config.arm_angle_limit)
         and abs(omega1) <= config.max_abs_omega1
         and abs(omega2) <= config.max_abs_omega2
     )
@@ -497,19 +515,21 @@ def matlab_reward(
     theta1, _, omega1, omega2 = np.asarray(state, dtype=np.float64)
     pendulum_error = upright_error(state)
     action_change = float(action) - float(previous_action)
-    constraint_flag = 1.0 if within_matlab_constraints(state, config) else 0.0
+    if config.periodic_time_cost:
+        arm_cost = 4.0 * np.sin(0.5 * theta1) ** 2
+        step_reward = -PERIODIC_STEP_COST
+    else:
+        arm_cost = arm_position_error(theta1, 0.0, config)**2
+        step_reward = config.constraint_reward_weight * within_matlab_constraints(state, config)
     cost = (
-        config.arm_angle_weight * theta1**2
+        config.arm_angle_weight * arm_cost
         + pendulum_error**2
         + config.arm_velocity_weight * omega1**2
         + config.velocity_weight * omega2**2
         + config.current_weight * float(action) ** 2
         + config.action_change_weight * action_change**2
     )
-    return float(
-        config.constraint_reward_weight * constraint_flag
-        - config.reward_scale * cost
-    )
+    return float(step_reward - config.reward_scale * cost)
 
 
 class FurutaSwingUpEnv(gym.Env):
@@ -764,7 +784,9 @@ class FurutaSwingUpEnv(gym.Env):
         )
         if is_success:
             reward += self.config.terminal_success_bonus
-        if integration_failed and within_matlab_constraints(
+        if is_unsafe and self.config.periodic_time_cost:
+            reward -= PERIODIC_UNSAFE_PENALTY
+        elif integration_failed and within_matlab_constraints(
             self.plant.x,
             self.config,
         ):

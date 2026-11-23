@@ -521,6 +521,9 @@ class SuccessFirstEvalCallback(EvalCallback):
         self.success_model_directory = Path(best_model_save_path)
         self.best_success_score = (-1.0, -float("inf"))
 
+    def validation_score(self, success_rate: float) -> tuple[float, ...]:
+        return checkpoint_selection_score(success_rate, self.last_mean_reward)
+
     def _on_step(self) -> bool:
         evaluating = self.eval_freq > 0 and self.n_calls % self.eval_freq == 0
         if evaluating:
@@ -530,10 +533,7 @@ class SuccessFirstEvalCallback(EvalCallback):
             success_rate = sum(self._is_success_buffer) / len(
                 self._is_success_buffer
             )
-            score = checkpoint_selection_score(
-                success_rate,
-                self.last_mean_reward,
-            )
+            score = self.validation_score(success_rate)
             if score > self.best_success_score:
                 self.best_success_score = score
                 self.success_model_directory.mkdir(parents=True, exist_ok=True)

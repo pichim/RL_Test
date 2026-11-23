@@ -1,0 +1,48 @@
+{
+  "state_order": [
+    "arm_angle",
+    "upright_error",
+    "arm_velocity",
+    "pendulum_velocity",
+    "previous_normalized_action"
+  ],
+  "equilibrium_current_A": 0.0,
+  "actor_current_jacobian": [
+    0.47206878662109375,
+    -3.6346909473650157,
+    0.13828277587890625,
+    -0.31113624572753906,
+    0.0035762786865234375
+  ],
+  "teacher_current_jacobian": [
+    0.4472,
+    -3.4376,
+    0.1555,
+    -0.3031,
+    0.0
+  ],
+  "closed_loop_poles": [
+    {
+      "real": 0.0053432433496268805,
+      "imag": 0.0
+    },
+    {
+      "real": 0.7643504212023529,
+      "imag": 0.0
+    },
+    {
+      "real": 0.9043801969515808,
+      "imag": 0.0
+    },
+    {
+      "real": 0.9828438007885056,
+      "imag": 0.021646260473747462
+    },
+    {
+      "real": 0.9828438007885056,
+      "imag": -0.021646260473747462
+    }
+  ],
+  "spectral_radius": 0.9830821417058155,
+  "finite_difference_step": 0.0001
+}

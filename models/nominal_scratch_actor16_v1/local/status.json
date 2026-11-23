@@ -1,0 +1,9 @@
+{
+  "state": "completed",
+  "phase": "report",
+  "updated_utc": "2026-11-23T17:52:41.002061+00:00",
+  "training_seconds": 1491.2167731209993,
+  "evaluation_seconds": 149.27798846099904,
+  "success_count": 100,
+  "unsafe_count": 0
+}
