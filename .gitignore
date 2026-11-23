@@ -1,8 +1,7 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
-.coverage
 .venv/
-
-# Generated training and evaluation artifacts stay local or in artifact storage.
+/runs/
 /src/runs/
+/archives/

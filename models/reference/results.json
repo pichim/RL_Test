@@ -1,5 +1,9 @@
 {
-  "checkpoints": [
+  "archive_commit": "a399b03",
+  "training_seed": 0,
+  "training_decisions": 250000,
+  "selected_decision": 225000,
+  "validation": [
     {
       "timesteps": 25000,
       "episodes": 50,
@@ -120,5 +124,96 @@
       "timeout": 38,
       "mean_discounted_reward": 41.285541400192045
     }
-  ]
+  ],
+  "nominal": {
+    "seed_range": [
+      80000,
+      80099
+    ],
+    "starts": 100,
+    "balanced": 100,
+    "unsafe": 0,
+    "mean_finish_s": 2.986419999999999,
+    "mean_current_change_rms_A": 0.029252999933433027
+  },
+  "fresh_nominal": {
+    "starts": 50,
+    "balanced": 50,
+    "unsafe": 0,
+    "mean_finish_s": 3.03832,
+    "seed_range": [
+      91000,
+      91049
+    ]
+  },
+  "capture": {
+    "starts": 30,
+    "balanced": 30,
+    "unsafe": 0
+  },
+  "upright": {
+    "recovery_starts": 81,
+    "actor_recovered": 81,
+    "actor_unsafe": 0,
+    "lqr_recovered": 81,
+    "lqr_unsafe": 0,
+    "current_probes": 2500,
+    "mean_abs_current_error_A": 0.04650059058862005,
+    "p95_abs_current_error_A": 0.18157293472290076,
+    "max_abs_current_error_A": 0.778748433876038
+  },
+  "local_diagnostics": {
+    "state_order": [
+      "arm_angle",
+      "upright_error",
+      "arm_velocity",
+      "pendulum_velocity",
+      "previous_normalized_action"
+    ],
+    "equilibrium_current_A": 0.0,
+    "actor_current_jacobian": [
+      0.3731250762939453,
+      -3.4487247467041016,
+      0.14781951904296875,
+      -0.30994415283203125,
+      0.007152557373046875
+    ],
+    "teacher_current_jacobian": [
+      0.4472,
+      -3.4376,
+      0.1555,
+      -0.3031,
+      0.0
+    ],
+    "closed_loop_poles": [
+      {
+        "real": 0.010201547395681354,
+        "imag": 0.0
+      },
+      {
+        "real": 0.8432814583850875,
+        "imag": 0.0
+      },
+      {
+        "real": 0.8670600102532029,
+        "imag": 0.0
+      },
+      {
+        "real": 0.9782366906745783,
+        "imag": 0.013480260752291997
+      },
+      {
+        "real": 0.9782366906745783,
+        "imag": -0.013480260752291997
+      }
+    ],
+    "spectral_radius": 0.9783295663588525,
+    "finite_difference_step": 0.0001
+  },
+  "sha256": {
+    "actor.pt2": "a310d16170d62806f907567bd346e4b2c3e0d3afc54f81413fe5f27f46415f24",
+    "model.zip": "8046be9782bc99974c995e67573dc0f63100c8b5d42e3e85c2aae1322726d32f",
+    "capture_starts.csv": "ef5bc3ee5d03612c04172e35e35222d40a62f5b6fe351e7133679af835d373c9",
+    "config.json": "0259c74803d22d76c1c251bcbb9a5f7444fc875b6a7fde2e6213fda767c244b0"
+  }
 }
