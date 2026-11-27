@@ -1,7 +1,7 @@
 """Edit these settings, then run train.py."""
 
 from dataclasses import dataclass
-from math import isfinite, pi
+from math import isclose, isfinite, pi
 import os
 from pathlib import Path
 
@@ -47,6 +47,13 @@ class Task:
     def control_period(self) -> float:
         return self.sample_time * self.action_repeat
 
+    def steps_at_rate(self, rate_hz):
+        samples = 1 / (rate_hz * self.sample_time)
+        steps = round(samples)
+        if steps < 1 or not isclose(samples, steps):
+            raise ValueError(f"{rate_hz} Hz must span a whole number of plant steps")
+        return steps
+
     def __post_init__(self):
         if self.task_version != TASK_VERSION:
             raise ValueError(f"Unsupported task version {self.task_version!r}")
@@ -65,6 +72,28 @@ class Task:
         if (round(self.episode_time / self.sample_time) < 1
                 or round(self.balance_hold_time / self.sample_time) < 1):
             raise ValueError("Episode and balance time must each span at least one plant step")
+
+
+@dataclass(frozen=True)
+class EncoderSettings:
+    sample_time: float = 0.001
+    velocity_cutoff_hz: float = 100.0
+    arm_noise_std_rad: float = 0.000075
+    pendulum_noise_std_rad: float = 0.000075
+
+    def __post_init__(self):
+        if not (isfinite(self.sample_time) and self.sample_time > 0
+                and isfinite(self.velocity_cutoff_hz) and 0 < self.velocity_cutoff_hz < 0.5 / self.sample_time):
+            raise ValueError("Encoder cutoff must be positive and below the encoder Nyquist frequency")
+        if any(not isfinite(value) or value < 0 for value in (self.arm_noise_std_rad, self.pendulum_noise_std_rad)):
+            raise ValueError("Encoder noise standard deviations must be finite and nonnegative")
+
+    def plant_steps(self, task):
+        samples = self.sample_time / task.sample_time
+        steps = round(samples)
+        if steps < 1 or steps > task.action_repeat or not isclose(samples, steps):
+            raise ValueError("Encoder sampling must use whole plant steps and be at least as fast as control")
+        return steps
 
 
 @dataclass(frozen=True)
@@ -103,6 +132,7 @@ class Evaluation:
 
 
 TASK = Task()
+ENCODER = EncoderSettings()
 TRAINING = Training()
 EVALUATION = Evaluation()
 

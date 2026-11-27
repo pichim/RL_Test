@@ -3,7 +3,8 @@
 Train one symmetric neural controller from scratch with SAC for the periodic
 Furuta pendulum. The controller commands up to ±1 A. LQR supplies local
 training examples. The benchmarks evaluate the learned actor and include
-LQR as a local comparison. The equations, observations, reward, and
+LQR as a local comparison. The actor trains on simulated encoder features
+and the critics use clean simulator features. The equations, observations, reward, and
 learning procedure are in [README_MATH.md](README_MATH.md).
 
 ## Train and evaluate
@@ -19,15 +20,17 @@ python -u src/train.py
 
 Edit [src/config.py](src/config.py) to change the training or evaluation
 settings. The current defaults use a 16×16 actor, 64×64 critics, and
-300,000 decisions. Training and checkpoint selection run at 200 Hz. The same
-selected checkpoint then runs through the nominal, upright, and
+300,000 decisions. Training ends an episode on the first uninterrupted
+one-second hold, a safety violation, or the five-second limit. Checkpoint
+validation runs to five seconds unless a safety violation ends it early.
+Both use 200 Hz. The selected checkpoint then runs through the nominal, upright, and
 post-capture benchmarks at both 200 Hz and 500 Hz. Both rates use the
 same benchmark starts and a 1 ms plant integration step. The current
 command is held for five integration steps at 200 Hz and two at 500 Hz.
 
 The trainer prints a new `runs/local_…/` directory with these outputs.
 
-- `config.json` and `training.json` record the task and training settings.
+- `config.json`, `encoder.json`, and `training.json` record the task, encoder, and training settings.
 - `best/best_model.zip` is the selected checkpoint. `actor.pt2` is its exported actor.
 - `evaluation/` and `evaluation_500hz/` contain the effective task settings, benchmark results, and selected episode plots.
 - `capture_starts.csv` is the shared post-capture fixture. `timing.json` records training and total evaluation time.
@@ -51,11 +54,28 @@ python -m pip check
 python -u src/train_seeds.py
 ```
 
-Edit `SEEDS` in [src/train_seeds.py](src/train_seeds.py) to choose the seeds.
-The default runs seeds 1, 2, and 3 sequentially. Every seed uses the same
-settings from [src/config.py](src/config.py), including the training budget
-and the validation and evaluation starts. Each seed gets its own run
-directory and both rate evaluations.
+The Linux launcher runs seeds 0, 1, and 2 in parallel for 550,000
+decisions each, with one process pinned to one logical CPU on each of
+three distinct physical cores. Edit `SEEDS` or `DECISIONS` in
+[src/train_seeds.py](src/train_seeds.py) to change this sweep.
+All other settings come from [src/config.py](src/config.py).
+Each seed gets its own run directory and both rate evaluations.
+Worker messages share the terminal.
+
+## Encoder and velocity estimate
+
+The four encoder settings are in [src/config.py](src/config.py). Encoder
+sampling defaults to 1 ms, an assumption based on the simulator step, with
+a 100 Hz velocity-filter pole and independent white angle noise of 75 µrad
+RMS on each joint. The simulator derives measured velocity from wrapped
+encoder-angle differences and the one-pole filter. Rewards and safety checks
+use the true plant state.
+
+Training and final evaluation use the saved encoder model. Keep
+`encoder.json` with `config.json` when moving a new checkpoint.
+Older checkpoints use their original ideal-input evaluation. The exported
+`actor.pt2` still takes seven features, including the two estimated speeds.
+Run the encoder and velocity estimator before constructing those features.
 
 ## Keep training running over SSH
 
@@ -107,16 +127,19 @@ Start with **Scalars → `eval/success_rate`**. Choose **Step** for the x-axis
 and set **Smoothing** to **0** to see the individual validation points. A
 step is one 5 ms control decision. By default, validation uses the same
 50 starts every 25,000 decisions.
-A value of `0.80` means 40 of 50 starts held balance for a full second.
-The trainer selects the checkpoint primarily by this score.
+A value of `0.80` means 40 of 50 starts balanced throughout the final
+second.
+The trainer ranks this score first, then fewer violations and earlier
+completion of sustained balance. Compare the longest holds and holds lost
+before the end in `validation_metrics.json`.
 
-| Chart                    | What it tells you                                                                                                                                                                                                  |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `eval/mean_ep_length`    | An episode can end early from either success or a safety violation. The full five seconds are 1,000 decisions. Read alongside the success rate and the `unsafe` and `timeout` counts in `validation_metrics.json`. |
-| `eval/mean_reward`       | Average total reward during validation. It can rise while fewer starts balance, so check the success rate first.                                                                                                   |
-| `rollout/*`              | Recent training episodes, including random warm-up actions and later exploration. Compare with deterministic `eval/*` to see how the controller performs without exploration.                                      |
-| `teacher/local_loss`     | Error against sampled LQR commands and slopes around upright. A low value shows good agreement on those examples. The swing-up and recovery tests measure the controller's behavior.                               |
-| `train/*` and `time/fps` | Optimizer diagnostics and training throughput. Use evaluation to judge controller quality.                                                                                                                         |
+| Chart                    | What it tells you                                                                                                                                                                    |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `eval/mean_ep_length`    | Validation runs for 1,000 decisions unless a safety violation ends it early. Read alongside the success rate and the `unsafe` and `timeout` counts in `validation_metrics.json`.     |
+| `eval/mean_reward`       | Average total reward during validation. Checkpoint selection uses the final hold, safety, and completion time.                                                                       |
+| `rollout/*`              | Recent training episodes, including random warm-up actions and later exploration. Compare with deterministic `eval/*` to see how the controller performs without exploration.        |
+| `teacher/local_loss`     | Error against sampled LQR commands and slopes around upright. A low value shows good agreement on those examples. The swing-up and recovery tests measure the controller's behavior. |
+| `train/*` and `time/fps` | Optimizer diagnostics and training throughput. Use evaluation to judge controller quality.                                                                                           |
 
 The dashboard is TensorBoard's standard Scalars view. The `teacher/*`
 charts are project-specific. For capture and LQR-region counts, open
@@ -148,4 +171,6 @@ python -m unittest discover -s tests
 ```
 
 See [PRESERVATION.md](PRESERVATION.md) for the frozen reference,
-archival workflow, and actor-width comparison.
+archival workflow, training experiments, and robustness comparison.
+The [retained run list](PRESERVATION.md#retained-training-runs) identifies
+the active controller candidates and the local archive for older runs.

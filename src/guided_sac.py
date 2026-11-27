@@ -8,15 +8,17 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 
 import gymnasium as gym
+from gymnasium import spaces
 import numpy as np
 import torch
 from stable_baselines3 import SAC
 from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 from stable_baselines3.common.policies import ContinuousCritic
+from stable_baselines3.common.torch_layers import FlattenExtractor
 from stable_baselines3.sac.policies import Actor, SACPolicy
 
 from furuta_env import (
-    FurutaSwingUpEnv, arm_position_error, mechanical_capture_ready, observation_from_plant, upright_error,
+    Encoder, FurutaSwingUpEnv, arm_position_error, mechanical_capture_ready, observation_from_plant, upright_error,
 )
 from furuta_model import FurutaPendulum
 
@@ -76,6 +78,8 @@ class ReflectedActor(Actor):
         )
 
     def get_action_dist_params(self, obs):
+        if isinstance(obs, dict):
+            obs = obs["measured"]
         pair = torch.cat((obs, obs * self.reflection))
         mean, log_std, kwargs = super().get_action_dist_params(pair)
         direct_mean, mirror_mean = mean.chunk(2)
@@ -88,6 +92,8 @@ class ReflectedActor(Actor):
         return (direct_mean - mirror_mean) * 0.5, scale, kwargs
 
     def action_log_prob(self, obs):
+        if isinstance(obs, dict):
+            obs = obs["measured"]
         action, log_prob = super().action_log_prob(obs)
         if self.lqr_observation_limits is not None and torch.is_grad_enabled():
             local = self.inside_lqr_region(obs)
@@ -104,12 +110,16 @@ class ReflectedCritic(ContinuousCritic):
         self.register_buffer("reflection", torch.tensor(REFLECTION, dtype=torch.float32))
 
     def forward(self, obs, actions):
+        if isinstance(obs, dict):
+            obs = obs["clean"]
         pairs = super().forward(
             torch.cat((obs, obs * self.reflection)), torch.cat((actions, -actions))
         )
         return tuple((direct + mirror) * 0.5 for direct, mirror in (q.chunk(2) for q in pairs))
 
     def q1_forward(self, obs, actions):
+        if isinstance(obs, dict):
+            obs = obs["clean"]
         pair = super().q1_forward(
             torch.cat((obs, obs * self.reflection)), torch.cat((actions, -actions))
         )
@@ -133,12 +143,20 @@ class ReflectedPolicy(SACPolicy):
         parameters["lqr_observation_limits"] = self.lqr_observation_limits
         return parameters
 
+    def _channel_kwargs(self, kwargs, features_extractor, channel):
+        if isinstance(self.observation_space, spaces.Dict):
+            space = self.observation_space[channel]
+            extractor = FlattenExtractor(space)
+            return dict(kwargs, observation_space=space, features_extractor=extractor,
+                        features_dim=extractor.features_dim)
+        return self._update_features_extractor(kwargs, features_extractor)
+
     def make_actor(self, features_extractor=None):
-        kwargs = self._update_features_extractor(self.actor_kwargs, features_extractor)
+        kwargs = self._channel_kwargs(self.actor_kwargs, features_extractor, "measured")
         return ReflectedActor(**kwargs, lqr_observation_limits=self.lqr_observation_limits).to(self.device)
 
     def make_critic(self, features_extractor=None):
-        kwargs = self._update_features_extractor(self.critic_kwargs, features_extractor)
+        kwargs = self._channel_kwargs(self.critic_kwargs, features_extractor, "clean")
         return ReflectedCritic(**kwargs).to(self.device)
 
 
@@ -180,7 +198,7 @@ def lqr_observation_limits(config):
     )
 
 
-def teacher_examples(config, seed):
+def teacher_examples(config, seed, encoder_settings=None):
     """Supervise on near-upright states and their held-current recovery trajectories."""
     rng = np.random.default_rng(seed)
     plant = FurutaPendulum(config.sample_time)
@@ -188,9 +206,15 @@ def teacher_examples(config, seed):
     observations, commands = [], []
     bounds = teacher_bounds(config)
     rollout_decisions = max(1, round(0.120 / config.control_period))
+    encoder = None if encoder_settings is None else Encoder(encoder_settings, config)
+    encoder_seed = seed
 
     for error in rng.uniform(-bounds, bounds, size=(192, 4)):
         plant.reset(error + [0.0, np.pi, 0.0, 0.0])
+        if encoder is not None:
+            encoder.reset(plant.x, encoder_seed)
+            encoder_seed = None
+        plant_steps = 0
         for _ in range(rollout_decisions):
             state = plant.x.copy()
             state[1] = upright_error(state)
@@ -199,10 +223,15 @@ def teacher_examples(config, seed):
             action = teacher.current(plant.x) / config.max_current
             # The memoryless teacher's target is valid across previous commands.
             previous = float(rng.uniform(-1.0, 1.0))
-            observations.append(observation_from_plant(plant, config, previous))
+            observation = (observation_from_plant(plant, config, previous) if encoder is None
+                           else encoder.observation(config, previous))
+            observations.append(observation)
             commands.append([action])
             for _ in range(config.action_repeat):
                 plant.step(action * config.max_current)
+                if encoder is not None:
+                    plant_steps += 1
+                    encoder.advance(plant.x, plant_steps)
 
     # The policy architecture supplies the exact mirrored examples.
     return np.asarray(observations), np.asarray(commands, dtype=np.float32)
@@ -211,11 +240,11 @@ def teacher_examples(config, seed):
 class LQRTeaching(BaseCallback):
     """Add local LQR supervision to each actor update made by stock SAC."""
 
-    def __init__(self, config, settings):
+    def __init__(self, config, settings, encoder_settings=None):
         super().__init__()
         self.slope_fractions = (0.10, 0.002)
         self.settings = settings
-        self.observations, self.targets = teacher_examples(config, settings.seed)
+        self.observations, self.targets = teacher_examples(config, settings.seed, encoder_settings)
         plant = FurutaPendulum(config.sample_time)
         teacher = LQRController(config.max_current)
         upright = np.array([0.0, np.pi, 0.0, 0.0])
@@ -384,10 +413,21 @@ class PeriodicValidation(gym.Wrapper):
                 "entered_teacher_box": self.entered_teacher_box,
                 "balanced_after_teacher_entry": info["is_success"] and self.entered_teacher_box,
                 "unsafe": info["unsafe"],
-                "timeout": truncated,
+                "timeout": truncated and not info["is_success"],
+                "hold_completed": info["hold_completed"],
+                "hold_lost_by_end": info["hold_completed"] and not info["is_success"],
+                "longest_hold_s": info["longest_hold_s"],
+                "balance_finish_s": info["balance_finish_s"],
                 "discounted_reward": self.return_discounted,
             }
         return observation, reward, terminated, truncated, info
+
+
+def validation_score(episodes):
+    """Prefer more final holds, fewer violations, and earlier sustained balance."""
+    finishes = [ep["balance_finish_s"] for ep in episodes if ep["balanced"]]
+    mean_finish = float(np.mean(finishes)) if finishes else float("inf")
+    return len(finishes), -sum(ep["unsafe"] for ep in episodes), -mean_finish
 
 
 class PeriodicValidationCallback(EvalCallback):
@@ -414,11 +454,7 @@ class PeriodicValidationCallback(EvalCallback):
             self.eval_env.seed(self.reset_seed)
         proceed = super()._on_step()
         if self.episodes:
-            score = (
-                sum(self._is_success_buffer) / len(self._is_success_buffer),
-                sum(ep["balanced_after_teacher_entry"] for ep in self.episodes) / len(self.episodes),
-                self.last_mean_reward,
-            )
+            score = validation_score(self.episodes)
             if score > self.best_score:
                 self.best_score = score
                 self.best_step = self.num_timesteps
@@ -428,12 +464,14 @@ class PeriodicValidationCallback(EvalCallback):
                 print(f"Selected checkpoint at {self.best_step:,} decisions", flush=True)
             outcomes = (
                 "balanced", "captured", "genuine_swingup", "entered_teacher_box",
-                "balanced_after_teacher_entry", "unsafe", "timeout",
+                "balanced_after_teacher_entry", "unsafe", "timeout", "hold_completed", "hold_lost_by_end",
             )
             self.history.append({
                 "timesteps": int(self.num_timesteps),
                 "episodes": len(self.episodes),
                 **{name: sum(int(ep[name]) for ep in self.episodes) for name in outcomes},
+                "mean_balance_finish_s": -score[-1] if score[0] else None,
+                "mean_longest_hold_s": float(np.mean([ep["longest_hold_s"] for ep in self.episodes])),
                 "mean_discounted_reward": float(np.mean([ep["discounted_reward"] for ep in self.episodes])),
             })
             self.episodes.clear()

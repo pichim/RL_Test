@@ -116,7 +116,9 @@ across all four RK4 stages of each plant step. [Plant implementation](src/furuta
 
 ## Observations, starts, and episode outcomes
 
-The actor and critics see the seven float32 features in this order.
+Both input channels use seven float32 features in this order. The actor
+uses measured angles and estimated velocities. Each critic uses the
+corresponding true simulator quantities.
 
 $$
 o_k =
@@ -146,10 +148,43 @@ Mechanical capture records when the pendulum is close to upright and moving
 slowly. The arm angle is unrestricted for this diagnostic. Safety and
 balance are checked after every plant step. The balance counter resets when
 a step leaves the balance box and succeeds after 1,000 consecutive valid
-steps. Training and checkpoint validation terminate on success or a safety
-violation and truncate at the horizon. If integration fails, terminate from
-the last finite state and report a violation. The final evaluation uses the
+steps. Default training terminates on the first completed hold or a safety
+violation. Checkpoint validation runs to the horizon unless a safety
+violation ends it early. The horizon is a time limit in training. If
+integration fails, terminate from the last finite state and report a violation. The final evaluation uses the
 success rules specified below. [Task implementation](src/furuta_env.py)
+
+## Encoder and privileged observations
+
+At each encoder tick $j$, sample two independent zero-mean Gaussian errors
+and add them to the true angles. The standard deviation is
+$7.5\times10^{-5}\thinspace\mathrm{rad}$ per joint. Define $\widehat q_j$
+as the measured angles and $\widehat\omega_j$ as the estimated velocities.
+
+$$
+\begin{aligned}
+\widehat q_j &= q_j+\epsilon_j,\\
+d_j &= \frac{\mathrm{wrap}(\widehat q_j-\widehat q_{j-1})}{T_e},\\
+\alpha_e &= \exp(-2\pi f_c T_e),\\
+\widehat\omega_j &= \alpha_e\widehat\omega_{j-1}+(1-\alpha_e)d_j .
+\end{aligned}
+$$
+
+The default encoder period $T_e$ is 1 ms and the velocity-filter pole is
+set from $f_c=100\thinspace\mathrm{Hz}$. The filter updates at the encoder
+rate, including between control decisions. On reset it warms up for at
+least five time constants with synthetic prior angle samples extrapolated
+at the initial velocity. Sampling uses an episode-specific seed separate
+from the reset-state generator. The previous actually issued command is
+identical in both channels.
+
+Replay stores the paired $o^{\mathrm{measured}}$ and
+$o^{\mathrm{clean}}$ at both transition endpoints. The actor samples
+from the measured channel. Both critics and their target copies evaluate
+the resulting action with the clean channel. The critic uses the clean
+physical state and previous action. The encoder filter's internal memory
+is implicit in this approximation. The plant, reward, and success criteria
+use the clean state. The actor export consumes measured features.
 
 ## Reward and energy potential
 
@@ -162,12 +197,13 @@ $$
 \begin{aligned}
 c_k &= 1.5e_1^2+e_2^2+0.015\omega_1^2+0.010\omega_2^2+
        2.0a_k^2+15.0(\Delta a_k)^2,\\
-r_k^0&=F_k-0.1c_k+100\thinspace\mathbf{1}[\text{successful termination}].
+r_k^0&=F_k-0.1c_k+100\thinspace\mathbf{1}[\text{first completed hold in the episode}].
 \end{aligned}
 $$
 
-$F_k=0$ after a constraint violation or integration failure. The effective
-action and action-change weights are $0.20$ and $1.50$. With $I_{\max}=1$ A
+$F_k=0$ after a constraint violation or integration failure. Award the
+completion bonus once per episode, even if the policy loses and regains
+balance. The effective action and action-change weights are $0.20$ and $1.50$. With $I_{\max}=1$ A
 they also multiply the numerical squared current and squared current change
 in A. The discrete change term uses $\Delta a_k$ directly. Evaluation
 reports the rate-normalized current slew separately.
@@ -250,13 +286,13 @@ $$
 Generate 192 starting error states uniformly inside the teaching box with
 the training seed, offset the pendulum coordinate by $\pi$, and simulate
 each for at most 120 ms (24 decisions). Before each step, stop the example
-trajectory if it has left the teaching box. Save the observation and
-normalized LQR target. Assign each saved observation an independent
+trajectory if it has left the teaching box. Save the measured observation and the normalized LQR target computed
+on the true state. Assign each saved observation an independent
 $\mathcal U[-1,1)$ previous command. This randomized feature is for the
 training example. The plant advances under the teacher's held current.
 
 The supervised loss uses 128 examples sampled with replacement and ten
-fixed probes to constrain local directional gains. For probe axis $i$ in
+fixed clean probes to constrain local directional gains. For probe axis $i$ in
 $(e_1,e_2,\omega_1,\omega_2,a_{k-1})$, use displacement
 $\delta b_i$ with $b=(0.10,0.05,0.25,0.50,0.25)$ and
 $\delta\in\lbrace 0.10,0.002\rbrace$. Let $p_{\delta,i}$ denote its encoded
@@ -287,25 +323,26 @@ random replay warm-up, including when the system is near upright.
 ## SAC updates and checkpoint choice
 
 The implementation uses Stable-Baselines3 SAC with two critics and
-their target copies. For a replay sample $(o,a,r,o',d)$, let $d=1$ on
-true termination and $d=0$ otherwise, including time limits. With
-$\tilde a'\sim\pi(\cdot\mid o')$, the one-step target is
+their target copies. In the equations below, $o_m$ and $o_c$ denote
+measured and clean features. Let $d=1$ on true termination and $d=0$
+otherwise, including time limits. With $\tilde a'\sim\pi(\cdot\mid o_m')$,
+the one-step target is
 
 $$
 y=r+(1-d)\gamma
-\left(\min_{i=1,2}\overline Q_i(o',\tilde a')
-      -\alpha\log\pi(\tilde a'\mid o')\right).
+\left(\min_{i=1,2}\overline Q_i(o_c',\tilde a')
+      -\alpha\log\pi(\tilde a'\mid o_m')\right).
 $$
 
-Use the following critic and actor losses, with $\tilde a\sim\pi(\cdot\mid o)$.
+Use the following critic and actor losses, with $\tilde a\sim\pi(\cdot\mid o_m)$.
 SAC evaluates the squashed action density using the tanh change-of-variables
 correction. Use the local gradient rule above in the actor loss.
 
 $$
-L_Q=\tfrac12\sum_{i=1}^2\mathbb E[(Q_i(o,a)-y)^2],
+L_Q=\tfrac12\sum_{i=1}^2\mathbb E[(Q_i(o_c,a)-y)^2],
 \qquad
 L_{\pi}=\mathbb E\left[
-\alpha\log\pi(\tilde a\mid o)-\min_{i=1,2}Q_i(o,\tilde a)
+\alpha\log\pi(\tilde a\mid o_m)-\min_{i=1,2}Q_i(o_c,\tilde a)
 \right].
 $$
 
@@ -315,7 +352,7 @@ its gradient. The temperature loss uses target entropy $\mathcal H_\star=-1$.
 
 $$
 L_\alpha=-\mathbb E[
-\beta\thinspace\mathrm{detach}(\log\pi(\tilde a\mid o)+\mathcal H_\star)
+\beta\thinspace\mathrm{detach}(\log\pi(\tilde a\mid o_m)+\mathcal H_\star)
 ].
 $$
 
@@ -334,10 +371,12 @@ update, with $\tau=0.005$. [SAC paper](https://arxiv.org/abs/1812.05905)
 
 Before each checkpoint validation, reset the validation RNG to the same
 seed. Run 50 consecutive episodes for each checkpoint with the deterministic
-actor. Rank checkpoints lexicographically by balance rate, rate of balance
-after visiting the teaching box, and mean undiscounted base reward. Region
-visits are checked at reset and at decision endpoints in validation.
-Keep the earlier checkpoint on an exact tie. Export the selected
+actor. Rank checkpoints lexicographically by number of final one-second
+holds, fewer unsafe episodes, and earlier mean completion time of the final
+uninterrupted hold among successful starts. Track longest hold and whether a
+policy completed a hold but failed the final test. Region visits are checked
+at reset and at decision endpoints in validation. Keep the earlier
+checkpoint on an exact tie. Export the selected
 checkpoint after training. The run's saved task and training JSON give the
 exact settings for every run. Matching the mathematical model defines the
 same experiment. Exact parameter reproduction also depends on the same
@@ -356,8 +395,8 @@ The **near-upright** panel starts at the 81 points of the Cartesian
 product $\lbrace -0.85,0,0.85\rbrace^4$ scaled by the teaching bounds and offset to
 upright. Cycle the previous command through $-0.75,0,0.75$ in product
 order. Score the deterministic actor and the LQR separately using the
-training episode rule, so a one-second hold anywhere in the horizon
-counts. For current agreement, use a separate grid
+early-termination rule for every checkpoint, so a one-second hold anywhere
+in the horizon counts. For current agreement, use a separate grid
 $\lbrace -1,-0.6,0,0.6,1\rbrace^4$ scaled by the same bounds and cross it with
 previous commands $-0.75,-0.25,0.25,0.75$. Report mean, 95th percentile,
 and maximum absolute current error across the 2,500 probes.
@@ -384,7 +423,7 @@ The summaries average the per-episode values. This reports discrete
 command slew in A/s. It models the change in command and is independent
 of any inner current-control dynamics on hardware. [Evaluator](src/evaluate.py)
 
-The **local diagnostics** linearize the nonlinear held-current closed loop
+The **local diagnostics** use ideal actor inputs and linearize the nonlinear held-current closed loop
 at the upright equilibrium. In local coordinates
 $\xi=(e_1,e_2,\omega_1,\omega_2,a_{k-1})$, define the one-decision map
 $F_{\mathrm{cl}}$ by applying the deterministic actor and advancing the

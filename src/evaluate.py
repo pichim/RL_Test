@@ -5,30 +5,40 @@ from dataclasses import asdict, replace
 from datetime import datetime
 from itertools import product
 import json
-from math import isclose, isfinite
+from math import isfinite
 
-from config import EVALUATION, RUNS, Task, configure_runtime
+from config import EVALUATION, RUNS, EncoderSettings, Task, configure_runtime
 
 configure_runtime()
 
+from gymnasium import spaces
 import matplotlib.pyplot as plt
 import numpy as np
 from stable_baselines3 import SAC
 
 from furuta_env import (
-    FurutaSwingUpEnv, arm_position_error, balanced_state_ready, mechanical_capture_ready,
-    observation_from_plant, sample_matlab_initial_state, unsafe, upright_error, wrap_angle,
+    Encoder, FurutaSwingUpEnv, arm_position_error, balanced_state_ready, mechanical_capture_ready,
+    observation_from_plant, policy_observation, sample_matlab_initial_state, unsafe, upright_error, wrap_angle,
 )
 from furuta_model import FurutaPendulum
 from guided_sac import LQRController, atomic_write_json, teacher_bounds
 
 
-def load_task(model_path):
+def task_directory(model_path):
     for directory in (model_path.parent, model_path.parent.parent):
-        path = directory / "config.json"
-        if path.is_file():
-            return Task(**json.loads(path.read_text(encoding="utf-8")))
+        if (directory / "config.json").is_file():
+            return directory
     raise FileNotFoundError(f"No task configuration found beside {model_path}")
+
+
+def load_task(model_path):
+    path = task_directory(model_path) / "config.json"
+    return Task(**json.loads(path.read_text(encoding="utf-8")))
+
+
+def load_encoder(model_path):
+    path = task_directory(model_path) / "encoder.json"
+    return EncoderSettings(**json.loads(path.read_text(encoding="utf-8"))) if path.is_file() else None
 
 
 def nominal_start(seed, task):
@@ -38,13 +48,17 @@ def nominal_start(seed, task):
     return state
 
 
-def rollout(model, task, initial_state, previous_action=0.0, *, duration=None):
+def rollout(model, task, initial_state, previous_action=0.0, *, duration=None,
+            encoder_settings=None, encoder_seed=0):
     """Score the final uninterrupted hold across the full fixed-duration episode."""
     horizon = task.episode_time if duration is None else duration
     if not isfinite(horizon) or horizon <= 0:
         raise ValueError("Rollout duration must be finite and positive")
     plant = FurutaPendulum(task.sample_time)
     plant.reset(initial_state)
+    encoder = None if encoder_settings is None else Encoder(encoder_settings, task)
+    if encoder is not None:
+        encoder.reset(plant.x, encoder_seed)
     held_action = previous_action
     command = held_action * task.max_current
     capture = 0.0 if mechanical_capture_ready(plant.x, task) else None
@@ -70,7 +84,7 @@ def rollout(model, task, initial_state, previous_action=0.0, *, duration=None):
     record(0.0)
     for step in range(round(horizon / task.sample_time)):
         if step % task.action_repeat == 0:
-            observation = observation_from_plant(plant, task, held_action)
+            observation = policy_observation(plant, task, held_action, encoder)
             action, _ = model.predict(observation, deterministic=True)
             held_action = float(np.clip(np.asarray(action).reshape(-1)[0], -1.0, 1.0))
             next_command = held_action * task.max_current
@@ -83,6 +97,8 @@ def rollout(model, task, initial_state, previous_action=0.0, *, duration=None):
             plant.x = last_finite_state
             violation = True
         plant.x[1] = wrap_angle(plant.x[1])
+        if encoder is not None and not violation:
+            encoder.advance(plant.x, step + 1)
         time = (step + 1) * task.sample_time
         violation = violation or unsafe(plant.x, task)
         if capture is None and mechanical_capture_ready(plant.x, task):
@@ -174,22 +190,22 @@ def summarize(rows):
     }
 
 
-def upright_benchmark(model, config):
+def upright_benchmark(model, config, encoder_settings=None):
     """Measure held-out LQR command agreement and nonlinear local recovery."""
     teacher = LQRController(config.max_current)
     bounds = teacher_bounds(config)
     upright = np.array([0.0, np.pi, 0.0, 0.0])
     recovered_actor = recovered_teacher = 0
     unsafe_actor = unsafe_teacher = 0
-    env = FurutaSwingUpEnv(config)
+    env = FurutaSwingUpEnv(config, encoder_settings=encoder_settings)
     try:
         for i, point in enumerate(product((-0.85, 0.0, 0.85), repeat=4)):
             initial = upright + bounds * point
             previous = (-0.75, 0.0, 0.75)[i % 3]
             for use_teacher in (False, True):
-                _, info = env.reset(options={"initial_state": initial})
+                _, info = env.reset(seed=i if encoder_settings is not None else None, options={"initial_state": initial})
                 env.last_normalized_action = previous
-                observation = observation_from_plant(env.plant, config, previous)
+                observation = env.observation()
                 done = False
                 while not done:
                     if use_teacher:
@@ -212,7 +228,9 @@ def upright_benchmark(model, config):
             for previous in (-0.75, -0.25, 0.25, 0.75):
                 observations.append(observation_from_plant(env.plant, config, previous))
                 targets.append(teacher.current(env.plant.x))
-        action, _ = model.predict(np.asarray(observations), deterministic=True)
+        probes = np.asarray(observations)
+        observation = probes if encoder_settings is None else {"measured": probes, "clean": probes}
+        action, _ = model.predict(observation, deterministic=True)
         command_errors = np.abs(action.ravel() * config.max_current - targets)
     finally:
         env.close()
@@ -229,7 +247,7 @@ def upright_benchmark(model, config):
     }
 
 
-def capture_panel(model, task, path):
+def capture_panel(model, task, path, encoder_settings=None):
     results = []
     with path.open(newline="", encoding="utf-8") as handle:
         for row in csv.DictReader(handle):
@@ -239,6 +257,7 @@ def capture_panel(model, task, path):
             previous = float(row["previous_command_A"]) / task.max_current
             outcome, _ = rollout(
                 model, task, initial, previous_action=previous, duration=float(row["time_remaining_s"]),
+                encoder_settings=encoder_settings, encoder_seed=int(row["seed"]),
             )
             results.append({"seed": int(row["seed"]), **outcome})
     if not results:
@@ -247,12 +266,19 @@ def capture_panel(model, task, path):
 
 
 def _evaluate_rate(model, model_path, task, directory, settings, capture_starts):
+    encoder = load_encoder(model_path)
+    if isinstance(model.observation_space, spaces.Dict) != (encoder is not None):
+        raise ValueError("Keep encoder.json with the task config for a measured-input checkpoint")
+    if encoder is not None:
+        encoder.plant_steps(task)
     directory.mkdir(parents=True)
     atomic_write_json(directory / "config.json", asdict(task))
+    if encoder is not None:
+        atomic_write_json(directory / "encoder.json", asdict(encoder))
     rows = []
     plotted_failure = False
     for index, seed in enumerate(range(settings.base_seed, settings.base_seed + settings.episodes), 1):
-        outcome, trace = rollout(model, task, nominal_start(seed, task))
+        outcome, trace = rollout(model, task, nominal_start(seed, task), encoder_settings=encoder, encoder_seed=seed)
         rows.append({"seed": seed, **outcome})
         if index <= settings.plot_episodes or (not outcome["balanced"] and not plotted_failure):
             stem = directory / f"episode_{index:03d}"
@@ -265,8 +291,8 @@ def _evaluate_rate(model, model_path, task, directory, settings, capture_starts)
     atomic_write_json(directory / "summary.json", {
         "model": str(model_path.resolve()), "base_seed": settings.base_seed, **summary,
     })
-    atomic_write_json(directory / "upright.json", upright_benchmark(model, task))
-    atomic_write_json(directory / "capture.json", capture_panel(model, task, capture_starts))
+    atomic_write_json(directory / "upright.json", upright_benchmark(model, task, encoder))
+    atomic_write_json(directory / "capture.json", capture_panel(model, task, capture_starts, encoder))
     return summary
 
 
@@ -295,10 +321,7 @@ def evaluate_rates(model_path, directory, settings=EVALUATION, *, capture_starts
     task = load_task(model_path)
     tasks = {}
     for rate, name in ((200, "evaluation"), (500, "evaluation_500hz")):
-        samples = 1 / (rate * task.sample_time)
-        repeat = round(samples)
-        if repeat < 1 or not isclose(samples, repeat):
-            raise ValueError(f"{rate} Hz must span a whole number of plant steps")
+        repeat = task.steps_at_rate(rate)
         tasks[rate] = (directory / name, replace(task, action_repeat=repeat))
 
     model = SAC.load(model_path, device="cpu")

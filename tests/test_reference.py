@@ -11,7 +11,7 @@ from unittest.mock import call, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from config import REFERENCE, Evaluation, Training, configure_runtime
+from config import ENCODER, REFERENCE, Evaluation, Training, configure_runtime
 configure_runtime()
 
 import numpy as np
@@ -19,17 +19,65 @@ import torch
 from stable_baselines3 import SAC
 
 from evaluate import capture_panel, evaluate_rates, load_task, nominal_start, plot_episode, rollout
-from furuta_env import FurutaSwingUpEnv, matlab_reward, unsafe
+from furuta_env import Encoder, FurutaSwingUpEnv, matlab_reward, unsafe
 from train import train
-from train_seeds import SEEDS, main as train_seeds
+from train_seeds import DECISIONS, available_cores, run_seed
 from guided_sac import (
-    EnergyShaping, LQRController, REFLECTION, ReflectedPolicy, lqr_observation_limits, teacher_examples,
+    EnergyShaping, LQRController, PeriodicValidation, REFLECTION, ReflectedPolicy,
+    lqr_observation_limits, teacher_examples, validation_score,
 )
 
 REFERENCE_TASK = load_task(REFERENCE / "model.zip")
 
 
 class ReferenceTests(unittest.TestCase):
+    def test_encoder_wrap_and_filter_match_the_backward_difference(self):
+        settings = replace(ENCODER, arm_noise_std_rad=0, pendulum_noise_std_rad=0)
+        encoder = Encoder(settings, REFERENCE_TASK)
+        state = np.array([np.pi - .001, -np.pi + .001, 0.0, 0.0])
+        encoder.reset(state, seed=11)
+        state[:2] = [-np.pi + .001, np.pi - .001]
+        encoder.advance(state, 1)
+        np.testing.assert_allclose(encoder.velocity, encoder.velocity_gain * np.array([.002, -.002]), atol=1e-10)
+        encoder.advance(state, 2)
+        np.testing.assert_allclose(encoder.velocity, encoder.alpha * encoder.velocity_gain * np.array([.002, -.002]),
+                                   atol=1e-10)
+
+    def test_encoder_noise_preserves_seeded_physics_and_previous_command(self):
+        clean = FurutaSwingUpEnv(REFERENCE_TASK)
+        measured = FurutaSwingUpEnv(REFERENCE_TASK, encoder_settings=ENCODER)
+        normal, _ = clean.reset(seed=42)
+        paired, _ = measured.reset(seed=42)
+        np.testing.assert_array_equal(normal, paired["clean"])
+        self.assertFalse(np.array_equal(paired["measured"], paired["clean"]))
+        repeated, _ = measured.reset(seed=42)
+        np.testing.assert_array_equal(repeated["measured"], paired["measured"])
+        baseline, reward, terminated, truncated, _ = clean.step([.25])
+        obs, new_reward, new_term, new_trunc, _ = measured.step([.25])
+        np.testing.assert_array_equal(obs["clean"], baseline)
+        self.assertEqual(obs["measured"][-1], .25)
+        self.assertEqual((new_reward, new_term, new_trunc), (reward, terminated, truncated))
+
+    def test_actor_and_both_critic_paths_consume_only_their_own_channel(self):
+        env = FurutaSwingUpEnv(REFERENCE_TASK, encoder_settings=ENCODER)
+        model = SAC(ReflectedPolicy, env, seed=0, device="cpu",
+                    policy_kwargs={"net_arch": {"pi": [8], "qf": [8]}})
+        a = torch.zeros((3, 7))
+        b = torch.full_like(a, .5)
+        action = torch.full((3, 1), .25)
+        obs = {"measured": a, "clean": a}
+        with torch.inference_mode():
+            pi = model.actor(obs, deterministic=True)
+            torch.testing.assert_close(pi, model.actor({"measured": a, "clean": b}, deterministic=True), rtol=0, atol=0)
+            self.assertFalse(torch.equal(pi, model.actor({"measured": b, "clean": a}, deterministic=True)))
+            for critic in (model.critic, model.critic_target):
+                values = critic(obs, action)
+                other_measurement = {"measured": b, "clean": a}
+                torch.testing.assert_close(values, critic(other_measurement, action), rtol=0, atol=0)
+                torch.testing.assert_close(critic.q1_forward(obs, action), critic.q1_forward(other_measurement, action),
+                                           rtol=0, atol=0)
+                self.assertFalse(torch.equal(values[0], critic({"measured": a, "clean": b}, action)[0]))
+
     def test_both_evaluations_use_the_same_checkpoint_seeds_and_capture_starts(self):
         model = REFERENCE / "model.zip"
         settings = Evaluation(episodes=2, base_seed=123)
@@ -80,15 +128,39 @@ class ReferenceTests(unittest.TestCase):
                 train(directory, replace(REFERENCE_TASK, action_repeat=2))
             self.assertFalse(directory.exists())
 
-    def test_seed_launcher_changes_only_the_seed(self):
+    def test_training_rejects_plant_step_that_cannot_evaluate_at_500hz(self):
+        task = replace(REFERENCE_TASK, sample_time=.00125, action_repeat=4)
+        encoder = replace(ENCODER, sample_time=task.sample_time)
+        with TemporaryDirectory() as tmp:
+            run = Path(tmp) / "run"
+            with self.assertRaisesRegex(ValueError, "500 Hz must span a whole number"):
+                train(run, task, encoder=encoder)
+            self.assertFalse(run.exists())
+
+    def test_seed_worker_pins_cpu_and_overrides_only_seed_and_budget(self):
         settings = Training(decisions=125_000, gamma=0.995)
         with (
             patch("train_seeds.TRAINING", settings),
-            patch("train_seeds.train_and_evaluate") as launch,
+            patch("train_seeds.os.sched_setaffinity") as pin,
+            patch("train.main") as launch,
             patch("builtins.print"),
         ):
-            train_seeds()
-        self.assertEqual(launch.call_args_list, [call(replace(settings, seed=seed)) for seed in SEEDS])
+            run_seed(3, 9)
+        pin.assert_called_once_with(0, {9})
+        self.assertEqual(DECISIONS, 550_000)
+        launch.assert_called_once_with(replace(settings, seed=3, decisions=DECISIONS))
+
+    def test_seed_launcher_uses_distinct_physical_cores_within_cpu_affinity(self):
+        siblings = {"cpu0": "0,8", "cpu8": "0,8", "cpu9": "1,9", "cpu12": "4,12"}
+
+        def sibling_list(path):
+            return siblings[path.parts[-3]] + "\n"
+
+        with (
+            patch("train_seeds.os.sched_getaffinity", return_value={0, 8, 9, 12}),
+            patch("train_seeds.Path.read_text", autospec=True, side_effect=sibling_list),
+        ):
+            self.assertEqual(available_cores(), (0, 9, 12))
 
     def test_integration_failure_removes_the_safe_reward(self):
         task = replace(REFERENCE_TASK, constraint_reward_weight=0.4)
@@ -111,6 +183,54 @@ class ReferenceTests(unittest.TestCase):
         _, _, terminated, truncated, info = env.step([0.0])
         self.assertTrue(terminated and not truncated and info["is_success"])
         self.assertEqual(env.plant_step_count, 1000)
+
+    def test_continuing_mode_pays_once_even_if_balance_is_lost_and_recaptured(self):
+        task = replace(REFERENCE_TASK, episode_time=.030, balance_hold_time=.010)
+        env = PeriodicValidation(FurutaSwingUpEnv(task, continue_after_success=True), .99)
+        upright = np.array([0.0, np.pi, 0.0, 0.0])
+        outside = np.array([0.30, np.pi, 0.0, 0.0])
+        env.reset(options={"initial_state": upright})
+        awarded = []
+        with patch.object(env.unwrapped.plant, "step"):
+            for state in (upright, upright, outside, upright, upright, outside):
+                env.unwrapped.plant.x = state.copy()
+                _, reward, terminated, truncated, info = env.step([0.0])
+                self.assertFalse(terminated)
+                awarded.append(round(reward - matlab_reward(state, 0.0, 0.0, task)))
+                self.assertEqual(truncated, len(awarded) == 6)
+        self.assertEqual(awarded, [0, 100, 0, 0, 0, 0])
+        metrics = info["validation_metrics"]
+        self.assertTrue(metrics["hold_lost_by_end"])
+        self.assertTrue(metrics["timeout"])
+        self.assertFalse(metrics["balanced"])
+        self.assertAlmostEqual(metrics["longest_hold_s"], .010)
+
+    def test_validation_measures_completion_of_the_final_uninterrupted_hold(self):
+        task = replace(REFERENCE_TASK, episode_time=.030, balance_hold_time=.010)
+        env = PeriodicValidation(FurutaSwingUpEnv(task, continue_after_success=True), .99)
+        upright = np.array([0.0, np.pi, 0.0, 0.0])
+        env.reset(options={"initial_state": upright})
+        with patch.object(env.unwrapped.plant, "step"):
+            for i in range(6):
+                env.unwrapped.plant.x = upright.copy()
+                if i == 2:
+                    env.unwrapped.plant.x[0] = .30
+                _, _, terminated, truncated, info = env.step([0.0])
+        self.assertTrue(truncated and not terminated)
+        metrics = info["validation_metrics"]
+        self.assertTrue(metrics["balanced"])
+        self.assertFalse(metrics["timeout"] or metrics["hold_lost_by_end"])
+        self.assertAlmostEqual(metrics["balance_finish_s"], .025)
+        self.assertAlmostEqual(metrics["longest_hold_s"], .015)
+
+    def test_checkpoint_ties_use_safety_then_balance_time(self):
+        hold = {"balanced": True, "unsafe": False, "balance_finish_s": 2.5}
+        slow = dict(hold, balance_finish_s=3.0)
+        unsafe = {"balanced": False, "unsafe": True, "balance_finish_s": None}
+        timeout = dict(unsafe, unsafe=False)
+        self.assertGreater(validation_score([hold, timeout]), validation_score([hold, unsafe]))
+        self.assertGreater(validation_score([hold, timeout]), validation_score([slow, timeout]))
+        self.assertGreater(validation_score([hold, unsafe]), validation_score([timeout, timeout]))
 
     def test_reset_and_direct_current_transition_match_the_archived_task(self):
         env = EnergyShaping(FurutaSwingUpEnv(REFERENCE_TASK), .99, .25)

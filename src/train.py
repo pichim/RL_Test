@@ -1,7 +1,7 @@
 """Train a 200 Hz Furuta controller and evaluate it at 200 and 500 Hz."""
 
 from argparse import ArgumentParser
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime
 from importlib.metadata import version
 from math import isclose
@@ -10,7 +10,7 @@ import shutil
 import sys
 from time import perf_counter
 
-from config import EVALUATION, RUNS, TASK, TRAINING, configure_runtime
+from config import ENCODER, EVALUATION, RUNS, TASK, TRAINING, configure_runtime
 
 configure_runtime()
 
@@ -25,9 +25,12 @@ from guided_sac import (
 )
 
 
-def train(directory, task=TASK, settings=TRAINING):
+def train(directory, task=TASK, settings=TRAINING, *, encoder=ENCODER):
     if not isclose(task.control_period, 0.005):
         raise ValueError("Training requires a 5 ms control period (200 Hz)")
+    if encoder is not None:
+        encoder.plant_steps(task)
+        encoder.plant_steps(replace(task, action_repeat=task.steps_at_rate(500)))
     interval = min(settings.validation_every, settings.decisions)
     if (interval <= 0 or settings.train_frequency < 1 or settings.decisions % interval
             or settings.decisions % settings.train_frequency or settings.validation_episodes < 1
@@ -38,6 +41,8 @@ def train(directory, task=TASK, settings=TRAINING):
     directory.mkdir(parents=True)
     print(f"Training on CPU\n{directory}", flush=True)
     atomic_write_json(directory / "config.json", asdict(task))
+    if encoder is not None:
+        atomic_write_json(directory / "encoder.json", asdict(encoder))
     atomic_write_json(directory / "training.json", {
         **asdict(settings),
         "python": sys.version.split()[0],
@@ -46,11 +51,12 @@ def train(directory, task=TASK, settings=TRAINING):
         "packages": {name: version(name) for name in ("numpy", "torch", "gymnasium", "stable-baselines3")},
     })
     training = Monitor(
-        EnergyShaping(FurutaSwingUpEnv(task), settings.gamma, settings.energy_weight),
+        EnergyShaping(FurutaSwingUpEnv(task, encoder_settings=encoder), settings.gamma, settings.energy_weight),
         filename=str(directory / "training"), info_keywords=MONITOR_KEYS,
     )
     validation = Monitor(
-        PeriodicValidation(FurutaSwingUpEnv(task), settings.gamma), info_keywords=MONITOR_KEYS,
+        PeriodicValidation(FurutaSwingUpEnv(task, continue_after_success=True, encoder_settings=encoder), settings.gamma),
+        info_keywords=MONITOR_KEYS,
     )
     try:
         model = SAC(
@@ -69,7 +75,7 @@ def train(directory, task=TASK, settings=TRAINING):
         )
         validator = PeriodicValidationCallback(validation, directory, settings)
         model.learn(
-            settings.decisions, callback=[LQRTeaching(task, settings), validator], progress_bar=True,
+            settings.decisions, callback=[LQRTeaching(task, settings, encoder), validator], progress_bar=True,
         )
     finally:
         training.close()
