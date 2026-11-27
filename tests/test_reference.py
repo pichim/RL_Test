@@ -7,27 +7,111 @@ from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from config import REFERENCE, configure_runtime
+from config import REFERENCE, Evaluation, Training, configure_runtime
 configure_runtime()
 
 import numpy as np
 import torch
 from stable_baselines3 import SAC
 
-from evaluate import load_task, nominal_start, plot_episode, rollout
+from evaluate import capture_panel, evaluate_rates, load_task, nominal_start, plot_episode, rollout
 from furuta_env import FurutaSwingUpEnv, matlab_reward, unsafe
+from train import train
+from train_seeds import SEEDS, main as train_seeds
 from guided_sac import (
-    EnergyShaping, REFLECTION, ReflectedPolicy, lqr_observation_limits, teacher_examples,
+    EnergyShaping, LQRController, REFLECTION, ReflectedPolicy, lqr_observation_limits, teacher_examples,
 )
 
 REFERENCE_TASK = load_task(REFERENCE / "model.zip")
 
 
 class ReferenceTests(unittest.TestCase):
+    def test_both_evaluations_use_the_same_checkpoint_seeds_and_capture_starts(self):
+        model = REFERENCE / "model.zip"
+        settings = Evaluation(episodes=2, base_seed=123)
+        with TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            panel = output / "capture_snapshot.csv"
+            panel.touch()
+            with patch("evaluate.SAC.load") as load, patch("evaluate._evaluate_rate") as evaluate, patch("builtins.print"):
+                evaluate_rates(model, output, settings, capture_starts=panel)
+        load.assert_called_once_with(model, device="cpu")
+        self.assertEqual(evaluate.call_args_list, [
+            call(load.return_value, model, REFERENCE_TASK, output / "evaluation", settings, panel),
+            call(load.return_value, model, replace(REFERENCE_TASK, action_repeat=2),
+                 output / "evaluation_500hz", settings, panel),
+        ])
+
+    def test_incompatible_plant_step_fails_before_starting_either_evaluation(self):
+        model = REFERENCE / "model.zip"
+        task = replace(REFERENCE_TASK, sample_time=0.005, action_repeat=1)
+        with (
+            patch("evaluate.load_task", return_value=task),
+            patch("evaluate.SAC.load") as load,
+            self.assertRaisesRegex(ValueError, "500 Hz"),
+        ):
+            evaluate_rates(model, Path("results"))
+        load.assert_not_called()
+
+    def test_post_capture_with_too_little_time_to_balance_is_scored(self):
+        class Zero:
+            @staticmethod
+            def predict(_observation, deterministic=True):
+                return [0.0], None
+
+        with TemporaryDirectory() as tmp:
+            panel = Path(tmp) / "starts.csv"
+            panel.write_text(
+                "seed,theta1_rad,theta2_rad,omega1_rad_s,omega2_rad_s,time_remaining_s,previous_command_A\n"
+                f"0,0,{np.pi},0,0,0.01,0\n",
+                encoding="utf-8",
+            )
+            result = capture_panel(Zero(), REFERENCE_TASK, panel)
+        self.assertEqual((result["starts"], result["captured"], result["balanced"], result["unsafe"]), (1, 1, 0, 0))
+
+    def test_training_rejects_500hz(self):
+        with TemporaryDirectory() as tmp:
+            directory = Path(tmp) / "run"
+            with self.assertRaisesRegex(ValueError, "200 Hz"):
+                train(directory, replace(REFERENCE_TASK, action_repeat=2))
+            self.assertFalse(directory.exists())
+
+    def test_seed_launcher_changes_only_the_seed(self):
+        settings = Training(decisions=125_000, gamma=0.995)
+        with (
+            patch("train_seeds.TRAINING", settings),
+            patch("train_seeds.train_and_evaluate") as launch,
+            patch("builtins.print"),
+        ):
+            train_seeds()
+        self.assertEqual(launch.call_args_list, [call(replace(settings, seed=seed)) for seed in SEEDS])
+
+    def test_integration_failure_removes_the_safe_reward(self):
+        task = replace(REFERENCE_TASK, constraint_reward_weight=0.4)
+        env = FurutaSwingUpEnv(task)
+        _, initial = env.reset(options={"initial_state": [0, np.pi, 0, 0]})
+        expected = matlab_reward(initial["state"], 0.0, 0.0, task) - task.constraint_reward_weight
+        with patch.object(env.plant, "step", side_effect=RuntimeError):
+            _, reward, terminated, truncated, info = env.step([0.0])
+        self.assertAlmostEqual(reward, expected)
+        self.assertTrue(terminated and not truncated and info["unsafe"])
+        np.testing.assert_array_equal(info["state"], initial["state"])
+
+    def test_500hz_holds_balance_for_exactly_one_second(self):
+        task = replace(REFERENCE_TASK, action_repeat=2)
+        env = FurutaSwingUpEnv(task)
+        env.reset(options={"initial_state": [0, np.pi, 0, 0]})
+        for _ in range(499):
+            _, _, terminated, truncated, _ = env.step([0.0])
+            self.assertFalse(terminated or truncated)
+        _, _, terminated, truncated, info = env.step([0.0])
+        self.assertTrue(terminated and not truncated and info["is_success"])
+        self.assertEqual(env.plant_step_count, 1000)
+
     def test_reset_and_direct_current_transition_match_the_archived_task(self):
         env = EnergyShaping(FurutaSwingUpEnv(REFERENCE_TASK), .99, .25)
         first, info = env.reset(seed=0)
@@ -105,6 +189,45 @@ class ReferenceTests(unittest.TestCase):
         self.assertFalse(result["balanced"])
         self.assertIsNotNone(result["first_balance_s"])
         self.assertGreater(trace[-1]["time_s"], 1.0)
+
+    def test_current_change_starts_at_previous_command(self):
+        class Hold:
+            @staticmethod
+            def predict(observation, deterministic=True):
+                return [observation[-1]], None
+
+        task = replace(REFERENCE_TASK, max_current=2.0, episode_time=.01, balance_hold_time=.005)
+        result, trace = rollout(Hold(), task, [0, 0, 0, 0], previous_action=0.25)
+        self.assertEqual(trace[0]["current_A"], 0.5)
+        self.assertEqual(result["current_change_rms_A"], 0.0)
+
+    def test_slew_uses_the_control_period(self):
+        class Hold:
+            @staticmethod
+            def predict(_observation, deterministic=True):
+                return [0.25], None
+
+        task = replace(REFERENCE_TASK, action_repeat=2, episode_time=.002, balance_hold_time=.001)
+        result, _ = rollout(Hold(), task, [0, 0, 0, 0])
+        self.assertEqual(result["current_change_rms_A"], 0.25)
+        self.assertEqual(result["current_slew_rms_A_per_s"], 125.0)
+
+    def test_training_stops_at_a_partial_final_control_step(self):
+        task = replace(REFERENCE_TASK, episode_time=.006, balance_hold_time=.002)
+        env = FurutaSwingUpEnv(task)
+        env.reset(options={"initial_state": [0, 0, 0, 0]})
+        self.assertFalse(env.step([0.0])[3])
+        _, _, terminated, truncated, _ = env.step([0.0])
+        self.assertFalse(terminated)
+        self.assertTrue(truncated)
+        self.assertEqual(env.plant_step_count, 6)
+
+    def test_lqr_uses_periodic_arm_error(self):
+        teacher = LQRController(REFERENCE_TASK.max_current)
+        state = np.array([0.1, np.pi + 0.02, 0.1, -0.2])
+        expected = teacher.current(state)
+        for turns in (-2, -1, 1, 2):
+            self.assertAlmostEqual(teacher.current(state + [turns * 2 * np.pi, 0, 0, 0]), expected)
 
     def test_frozen_checkpoint_and_export_agree(self):
         archived = json.loads((REFERENCE / "results.json").read_text())

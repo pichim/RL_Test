@@ -1,8 +1,10 @@
-"""Run nominal periodic Furuta training from scratch using config.py."""
+"""Train a 200 Hz Furuta controller and evaluate it at 200 and 500 Hz."""
 
+from argparse import ArgumentParser
 from dataclasses import asdict
 from datetime import datetime
 from importlib.metadata import version
+from math import isclose
 import platform
 import shutil
 import sys
@@ -12,7 +14,6 @@ from config import EVALUATION, RUNS, TASK, TRAINING, configure_runtime
 
 configure_runtime()
 
-import torch
 from stable_baselines3 import SAC
 from stable_baselines3.common.monitor import Monitor
 
@@ -25,12 +26,8 @@ from guided_sac import (
 
 
 def train(directory, task=TASK, settings=TRAINING):
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA is unavailable in this environment")
-    probe = torch.ones((8, 8), device="cuda")
-    if (probe @ probe)[0, 0].item() != 8.0:
-        raise RuntimeError("CUDA preflight failed")
-    del probe
+    if not isclose(task.control_period, 0.005):
+        raise ValueError("Training requires a 5 ms control period (200 Hz)")
     interval = min(settings.validation_every, settings.decisions)
     if (interval <= 0 or settings.train_frequency < 1 or settings.decisions % interval
             or settings.decisions % settings.train_frequency or settings.validation_episodes < 1
@@ -39,14 +36,13 @@ def train(directory, task=TASK, settings=TRAINING):
         raise ValueError("Choose a valid seed and an aligned training and validation budget")
 
     directory.mkdir(parents=True)
-    print(f"Training on {torch.cuda.get_device_name()}\n{directory}", flush=True)
+    print(f"Training on CPU\n{directory}", flush=True)
     atomic_write_json(directory / "config.json", asdict(task))
     atomic_write_json(directory / "training.json", {
         **asdict(settings),
         "python": sys.version.split()[0],
         "platform": platform.platform(),
-        "gpu": torch.cuda.get_device_name(),
-        "cuda": torch.version.cuda,
+        "device": "cpu",
         "packages": {name: version(name) for name in ("numpy", "torch", "gymnasium", "stable-baselines3")},
     })
     training = Monitor(
@@ -69,7 +65,7 @@ def train(directory, task=TASK, settings=TRAINING):
                 "actor_observes_previous_command": True,
                 "lqr_observation_limits": lqr_observation_limits(task),
             },
-            tensorboard_log=str(directory / "tensorboard"), device="cuda", verbose=1,
+            tensorboard_log=str(directory / "tensorboard"), device="cpu", verbose=1,
         )
         validator = PeriodicValidationCallback(validation, directory, settings)
         model.learn(
@@ -85,25 +81,27 @@ def train(directory, task=TASK, settings=TRAINING):
     return model_path
 
 
-def main():
+def main(settings=TRAINING):
+    """Train, export, and evaluate one controller, then return its checkpoint path."""
+    from evaluate import evaluate_rates
+
+    capture_starts = EVALUATION.capture_starts
+    if not capture_starts.is_file():
+        raise FileNotFoundError(capture_starts)
     directory = RUNS / datetime.now().strftime("local_%Y%m%d_%H%M%S_%f")
-    if not EVALUATION.capture_starts.is_file():
-        raise FileNotFoundError(EVALUATION.capture_starts)
     start = perf_counter()
-    model_path = train(directory, TASK, TRAINING)
-
-    from evaluate import evaluate
-
-    training_seconds = perf_counter() - start
+    model_path = train(directory, TASK, settings)
+    evaluation_start = perf_counter()
     capture_snapshot = directory / "capture_starts.csv"
-    shutil.copyfile(EVALUATION.capture_starts, capture_snapshot)
-    result = evaluate(model_path, directory / "evaluation", EVALUATION, capture_starts=capture_snapshot)
+    shutil.copyfile(capture_starts, capture_snapshot)
+    evaluate_rates(model_path, directory, EVALUATION, capture_starts=capture_snapshot)
     atomic_write_json(directory / "timing.json", {
-        "training_seconds": training_seconds,
-        "evaluation_seconds": perf_counter() - start - training_seconds,
+        "training_seconds": evaluation_start - start,
+        "evaluation_seconds": perf_counter() - evaluation_start,
     })
-    print(result)
+    return model_path
 
 
 if __name__ == "__main__":
+    ArgumentParser(description=__doc__).parse_args()
     main()

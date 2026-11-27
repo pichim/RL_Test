@@ -25,7 +25,7 @@ def upright_error(state: np.ndarray) -> float:
 
 
 def nominal_pendulum_energy_error(state: np.ndarray) -> float:
-    """Return nominal normalized pendulum-energy error for diagnostics only."""
+    """Return normalized nominal pendulum-energy error for shaping and diagnostics."""
     _, theta2, _, omega2 = np.asarray(state, dtype=np.float64)
     pendulum_inertia = (
         _NOMINAL_ENERGY_MODEL.J2zz
@@ -45,7 +45,7 @@ def nominal_pendulum_energy_error(state: np.ndarray) -> float:
 
 
 def mechanical_capture_ready(state: np.ndarray, config: Task) -> bool:
-    """Return True when the mechanical state lies inside the LQR entry box."""
+    """Check the broad capture limits for upright error and angular velocities."""
     _, _, omega1, omega2 = np.asarray(state, dtype=np.float64)
     return bool(
         abs(upright_error(state)) <= config.capture_angle
@@ -161,7 +161,7 @@ def matlab_reward(
 
 
 class FurutaSwingUpEnv(gym.Env):
-    """Five held RK4 steps per decision and a terminal one-second balance hold."""
+    """Hold each current over RK4 steps and terminate after the configured balance hold."""
 
     metadata = {"render_modes": []}
 
@@ -171,18 +171,7 @@ class FurutaSwingUpEnv(gym.Env):
         self.render_mode = None
         self.plant = FurutaPendulum(sample_time=config.sample_time)
         self.action_space = spaces.Box(-1.0, 1.0, shape=(1,), dtype=np.float32)
-        velocity_bound = 1.0
-        self.observation_space = spaces.Box(
-            low=np.array(
-                [-1.0, -1.0, -velocity_bound, -1.0, -1.0, -velocity_bound, -1.0],
-                dtype=np.float32,
-            ),
-            high=np.array(
-                [1.0, 1.0, velocity_bound, 1.0, 1.0, velocity_bound, 1.0],
-                dtype=np.float32,
-            ),
-            dtype=np.float32,
-        )
+        self.observation_space = spaces.Box(-1.0, 1.0, shape=(7,), dtype=np.float32)
         self.max_plant_steps = int(round(config.episode_time / config.sample_time))
         self.plant_step_count = 0
         self.last_normalized_action = 0.0
@@ -243,7 +232,8 @@ class FurutaSwingUpEnv(gym.Env):
         command_current = normalized_action * self.config.max_current
         integration_failed = False
 
-        for _ in range(self.config.action_repeat):
+        steps_remaining = self.max_plant_steps - self.plant_step_count
+        for _ in range(min(self.config.action_repeat, steps_remaining)):
             last_finite_state = self.plant.x.copy()
             try:
                 self.plant.step(command_current)
@@ -297,7 +287,7 @@ class FurutaSwingUpEnv(gym.Env):
         ):
             # An integration failure is a constraint failure even though the
             # state was rolled back for a finite terminal transition.
-            reward -= 1.0
+            reward -= self.config.constraint_reward_weight
         return (
             observation_from_plant(
                 self.plant,

@@ -68,7 +68,91 @@ with zero unsafe episodes. The corrected launcher passed a separate
 end-to-end CUDA smoke test after separating validation and final evaluation
 directories. The full evaluation was run from the completed checkpoint.
 
-The old generated directory was removed after these checks and the compact
-archive verification. The retained verification run is
-`runs/local_20261123_203957_207568/`. Its `verification.json` records these
-checks and its `evaluation/` directory contains the new plots.
+The generated verification runs were removed during cleanup. The tracked
+reference and local archive preserve the earlier baseline.
+
+## CPU trainer
+
+The CPU baseline uses stock SAC with seed 0 and 250,000 decisions. Its
+effective current and current-change weights are 0.30 and 1.50 at the
+nominal ±1 A limit. These results describe that recipe. For a later run,
+check the `config.json` and `training.json` saved in its run directory.
+
+For comparison, the archived trainer at `42532bf` was run with a minimal CPU
+adaptation. Its ten validation checkpoints and all 35 selected policy tensors
+matched the newer CPU run exactly. Both selected the 250k checkpoint and
+passed 100/100 nominal, 81/81 upright, and 30/30 post-capture starts, with
+zero unsafe episodes. Training took 16:11 for the archived CPU version
+and 16:02–16:37 for the newer CPU version on the reference desktop.
+
+The CPU-only trainer completed the full recipe with PyTorch 2.14.0+cpu.
+All ten validation records, the selected policy and optimizer states,
+and final evaluation metrics matched the previous CPU run exactly.
+The exported actors also agreed exactly on 128 input probes. Training
+took 15:38 and evaluation took 2:00.
+
+The timeout, periodic LQR angle, and post-capture current reporting fixes
+were checked with another full seed-0 CPU run. All ten validation records,
+saved policy and optimizer tensors, and evaluation outcomes matched the
+earlier CPU run exactly. The corrected post-capture mean RMS current
+change was 12.24 mA, previously reported as 13.23 mA.
+
+At the same baseline settings, seeds 1 and 2 passed all nominal, upright,
+and post-capture tests with checkpoints selected at 250k and 175k,
+respectively. Seed 3's selected 200k checkpoint passed 46/100 nominal,
+81/81 upright, and 30/30 post-capture starts. All three recorded zero unsafe
+episodes in final evaluation.
+
+The CUDA Graph experiment cut training time from 24:14 on eager CUDA to
+13:44, but its seed-0 controller passed 86/100 nominal, 73/81 upright,
+and 25/30 post-capture starts. The eager CUDA controller passed all three
+panels. The CPU timing comparison and GPU experiment used the same task
+and training settings.
+
+
+## Control-rate verification
+
+Training uses 200 Hz. A fresh seed-2 run reproduced the
+archived 200 Hz validation history, selected policy and optimizer tensors,
+and existing evaluation scores exactly. The evaluator also reports RMS
+command slew in A/s for comparisons across rates.
+
+The historical 500 Hz training experiment kept the 1 ms plant integration
+step and used a 2 ms control period. Its time-matched seed-2 run selected the 437,500
+decision checkpoint out of 625,000. It scored 11/50 on validation, 22/100
+nominal, 49/81 upright, and 4/30 post-capture. Six nominal episodes were
+unsafe.
+
+A separate 500 Hz seed-2 run changed only the effective current-change
+weight from 3.75 to 1.50. It scored 1/50 on validation, 1/100 nominal,
+49/81 upright, and 0/30 post-capture, with zero unsafe evaluation episodes.
+This diagnostic used a temporary output directory.
+
+The saved seed-1 and seed-2 actors trained at 200 Hz each passed 100/100
+nominal, 81/81 upright, and 30/30 post-capture starts when evaluated
+at 500 Hz in the same simulator. The current workflow evaluates each
+selected 200 Hz checkpoint at both rates and exports one actor.
+
+
+## Matched actor-width comparison
+
+All three runs trained at 200 Hz on CPU for 300,000 decisions with seed 0.
+Only the actor width varied. They used 64×64 critics, a learning rate of
+0.0002, 50,000 warm-up decisions, one SAC update per decision, energy weight
+0.25, and effective current and current-change costs of 0.20 and 1.50.
+The limits, reward, and benchmark starts matched across all three runs.
+
+| Actor | Local run suffix | Selected decision | 200 Hz nominal / upright / post-capture | 500 Hz nominal / upright / post-capture |
+| ----- | ---------------- | ----------------: | --------------------------------------- | --------------------------------------- |
+| 16×16 | 155301_196149    |           225,000 | 100/100, 81/81, 30/30                   | 100/100, 81/81, 30/30                   |
+| 12×12 | 165726_990606    |           175,000 | 28/100, 55/81, 2/30                     | 32/100, 57/81, 3/30                     |
+| 8×8   | 174839_845564    |           250,000 | 97/100, 81/81, 30/30                    | 98/100, 81/81, 30/30                    |
+
+The local directories use the prefix `runs/local_20261126_` and remain
+outside Git. The 16×16 checkpoint passed all panels without a simulated
+safety violation. The 8×8 passed both recovery panels and hit a safety
+guard on nominal seeds 80051 and 80069 at both rates. The selected
+checkpoints scored 50/50, 15/50, and 49/50 on validation respectively.
+At 300,000 decisions those scores were 1/50, 2/50, and 21/50. This is one
+seed per width. The [current mathematics](README_MATH.md) describes the
+16×16 default and the shared recipe.

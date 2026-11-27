@@ -1,10 +1,11 @@
 """Evaluate one neural policy and save compact Furuta rollout plots."""
 
 import csv
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import datetime
 from itertools import product
 import json
+from math import isclose, isfinite
 
 from config import EVALUATION, RUNS, Task, configure_runtime
 
@@ -37,12 +38,15 @@ def nominal_start(seed, task):
     return state
 
 
-def rollout(model, task, initial_state, previous_action=0.0):
+def rollout(model, task, initial_state, previous_action=0.0, *, duration=None):
     """Score the final uninterrupted hold across the full fixed-duration episode."""
+    horizon = task.episode_time if duration is None else duration
+    if not isfinite(horizon) or horizon <= 0:
+        raise ValueError("Rollout duration must be finite and positive")
     plant = FurutaPendulum(task.sample_time)
     plant.reset(initial_state)
     held_action = previous_action
-    command = 0.0
+    command = held_action * task.max_current
     capture = 0.0 if mechanical_capture_ready(plant.x, task) else None
     initial_capture = capture is not None
     first_balance = None
@@ -64,7 +68,7 @@ def rollout(model, task, initial_state, previous_action=0.0):
         })
 
     record(0.0)
-    for step in range(round(task.episode_time / task.sample_time)):
+    for step in range(round(horizon / task.sample_time)):
         if step % task.action_repeat == 0:
             observation = observation_from_plant(plant, task, held_action)
             action, _ = model.predict(observation, deterministic=True)
@@ -96,6 +100,7 @@ def rollout(model, task, initial_state, previous_action=0.0):
 
     success = not violation and balance_steps >= round(task.balance_hold_time / task.sample_time)
     balance_start = max(0.0, trace[-1]["time_s"] - balance_steps * task.sample_time) if success else None
+    change_rms = rms(changes)
     return {
         "balanced": success,
         "unsafe": violation,
@@ -105,7 +110,8 @@ def rollout(model, task, initial_state, previous_action=0.0):
         "final_balance_start_s": balance_start,
         "finish_s": balance_start + task.balance_hold_time if success else None,
         "current_rms_A": rms(currents),
-        "current_change_rms_A": rms(changes),
+        "current_change_rms_A": change_rms,
+        "current_slew_rms_A_per_s": change_rms / task.control_period,
     }, trace
 
 
@@ -164,12 +170,12 @@ def summarize(rows):
         "mean_capture_s": float(np.mean(capture_times)) if capture_times else None,
         "mean_finish_s": float(np.mean(finishes)) if finishes else None,
         "mean_current_change_rms_A": float(np.mean([row["current_change_rms_A"] for row in rows])),
+        "mean_current_slew_rms_A_per_s": float(np.mean([row["current_slew_rms_A_per_s"] for row in rows])),
     }
 
 
-def upright_benchmark(model_path, config):
+def upright_benchmark(model, config):
     """Measure held-out LQR command agreement and nonlinear local recovery."""
-    model = SAC.load(model_path, device="cpu")
     teacher = LQRController(config.max_current)
     bounds = teacher_bounds(config)
     upright = np.array([0.0, np.pi, 0.0, 0.0])
@@ -211,7 +217,7 @@ def upright_benchmark(model_path, config):
     finally:
         env.close()
     return {
-        "recovery_starts": 81,
+        "recovery_starts": 3**len(bounds),
         "actor_recovered": recovered_actor,
         "actor_unsafe": unsafe_actor,
         "lqr_recovered": recovered_teacher,
@@ -230,21 +236,19 @@ def capture_panel(model, task, path):
             initial = np.array([float(row[key]) for key in (
                 "theta1_rad", "theta2_rad", "omega1_rad_s", "omega2_rad_s",
             )])
-            remaining = replace(task, episode_time=float(row["time_remaining_s"]))
             previous = float(row["previous_command_A"]) / task.max_current
-            outcome, _ = rollout(model, remaining, initial, previous_action=previous)
+            outcome, _ = rollout(
+                model, task, initial, previous_action=previous, duration=float(row["time_remaining_s"]),
+            )
             results.append({"seed": int(row["seed"]), **outcome})
     if not results:
         raise ValueError(f"Capture panel is empty: {path}")
     return {**summarize(results), "episodes": results}
 
 
-def evaluate(model_path, directory, settings=EVALUATION, *, capture_starts=None):
-    if settings.episodes < 1 or settings.base_seed < 0 or settings.plot_episodes < 0:
-        raise ValueError("Invalid evaluation count or seed")
-    task = load_task(model_path)
-    model = SAC.load(model_path, device="cpu")
+def _evaluate_rate(model, model_path, task, directory, settings, capture_starts):
     directory.mkdir(parents=True)
+    atomic_write_json(directory / "config.json", asdict(task))
     rows = []
     plotted_failure = False
     for index, seed in enumerate(range(settings.base_seed, settings.base_seed + settings.episodes), 1):
@@ -261,13 +265,49 @@ def evaluate(model_path, directory, settings=EVALUATION, *, capture_starts=None)
     atomic_write_json(directory / "summary.json", {
         "model": str(model_path.resolve()), "base_seed": settings.base_seed, **summary,
     })
-    atomic_write_json(directory / "upright.json", upright_benchmark(model_path, task))
-    panel = settings.capture_starts if capture_starts is None else capture_starts
-    atomic_write_json(directory / "capture.json", capture_panel(model, task, panel))
+    atomic_write_json(directory / "upright.json", upright_benchmark(model, task))
+    atomic_write_json(directory / "capture.json", capture_panel(model, task, capture_starts))
     return summary
+
+
+def _capture_fixture(settings, capture_starts):
+    if settings.episodes < 1 or settings.base_seed < 0 or settings.plot_episodes < 0:
+        raise ValueError("Invalid evaluation count or seed")
+    panel = settings.capture_starts if capture_starts is None else capture_starts
+    if not panel.is_file():
+        raise FileNotFoundError(panel)
+    return panel
+
+
+def evaluate(model_path, directory, settings=EVALUATION, *, capture_starts=None, action_repeat=None):
+    """Evaluate one checkpoint at its saved rate or with a different current hold."""
+    panel = _capture_fixture(settings, capture_starts)
+    task = load_task(model_path)
+    if action_repeat is not None:
+        task = replace(task, action_repeat=action_repeat)
+    model = SAC.load(model_path, device="cpu")
+    return _evaluate_rate(model, model_path, task, directory, settings, panel)
+
+
+def evaluate_rates(model_path, directory, settings=EVALUATION, *, capture_starts=None):
+    """Score the same checkpoint and starting states at both control rates."""
+    panel = _capture_fixture(settings, capture_starts)
+    task = load_task(model_path)
+    tasks = {}
+    for rate, name in ((200, "evaluation"), (500, "evaluation_500hz")):
+        samples = 1 / (rate * task.sample_time)
+        repeat = round(samples)
+        if repeat < 1 or not isclose(samples, repeat):
+            raise ValueError(f"{rate} Hz must span a whole number of plant steps")
+        tasks[rate] = (directory / name, replace(task, action_repeat=repeat))
+
+    model = SAC.load(model_path, device="cpu")
+    for rate, (output, rate_task) in tasks.items():
+        print(f"Evaluating at {rate} Hz\n{output}", flush=True)
+        summary = _evaluate_rate(model, model_path, rate_task, output, settings, panel)
+        print(summary, flush=True)
 
 
 if __name__ == "__main__":
     output = RUNS / datetime.now().strftime("evaluation_%Y%m%d_%H%M%S_%f")
-    print(evaluate(EVALUATION.model, output))
-    print(output)
+    evaluate_rates(EVALUATION.model, output)

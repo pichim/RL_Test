@@ -49,7 +49,9 @@ class LQRController:
 
     def current(self, state):
         theta1, _, omega1, omega2 = state
-        error_state = np.array([float(theta1 - 0.0), upright_error(state), omega1, omega2], dtype=np.float64)
+        if not -np.pi <= theta1 < np.pi:
+            theta1 = arm_position_error(theta1, 0.0)
+        error_state = np.array([theta1, upright_error(state), omega1, omega2], dtype=np.float64)
         return float(np.clip(-self.gain @ error_state, -self.max_current, self.max_current))
 
 
@@ -185,10 +187,11 @@ def teacher_examples(config, seed):
     teacher = LQRController(config.max_current)
     observations, commands = [], []
     bounds = teacher_bounds(config)
+    rollout_decisions = max(1, round(0.120 / config.control_period))
 
     for error in rng.uniform(-bounds, bounds, size=(192, 4)):
         plant.reset(error + [0.0, np.pi, 0.0, 0.0])
-        for _ in range(24):
+        for _ in range(rollout_decisions):
             state = plant.x.copy()
             state[1] = upright_error(state)
             if np.any(np.abs(state) > bounds):

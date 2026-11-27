@@ -40,8 +40,12 @@ class Task:
     arm_angle_weight: float = 1.5
     arm_velocity_weight: float = 0.015
     # Weights multiply normalized commands inside the reward scale.
-    current_weight: float = 3.0
+    current_weight: float = 2.0
     action_change_weight: float = 15.0
+
+    @property
+    def control_period(self) -> float:
+        return self.sample_time * self.action_repeat
 
     def __post_init__(self):
         if self.task_version != TASK_VERSION:
@@ -66,19 +70,19 @@ class Task:
 @dataclass(frozen=True)
 class Training:
     seed: int = 0
-    decisions: int = 250_000
+    decisions: int = 300_000
     validation_every: int = 25_000
     validation_episodes: int = 50
     validation_seed: int = 10_000
     actor_widths: tuple[int, ...] = (16, 16)
     critic_widths: tuple[int, ...] = (64, 64)
     gamma: float = 0.99
-    learning_rate: float = 0.0003
-    learning_starts: int = 40_000
+    learning_rate: float = 0.0002
+    learning_starts: int = 50_000
     replay_capacity: int = 1_000_000
     batch_size: int = 256
     tau: float = 0.005
-    train_frequency: int = 2
+    train_frequency: int = 1
     gradient_steps: int = 1
     target_update_interval: int = 1
     entropy_coefficient: str = "auto_0.1"
